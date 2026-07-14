@@ -1,0 +1,6 @@
+# Working directory: wayfinder maps, tickets, voice samples, model bake-off outputs.
+# Contains personal voice recordings and braindump transcripts. Never publish.
+.scratch/
+
+# Local sandbox tooling config, personal to the machine, not part of the project.
+.ai-jail
