@@ -438,6 +438,17 @@ appearing merely broken. Feeds **#8**.
 
 ## Open questions — must be tested by a human
 
+> **RESOLVED 2026-07-15** (issue #13, Finder-launch test) →
+> [`input-monitoring-grant-behavior.md`](./input-monitoring-grant-behavior.md). Both answered:
+> **A.** the denied path is fail-silent — `addGlobalMonitorForEvents` **and**
+> `CGEvent.tapCreate(.listenOnly)` both return **non-nil when denied** (the `CGEvent.h` "NULL when
+> unpermitted" header is wrong), zero events flow, so `CGPreflightListenEventAccess()` is the only
+> gate. **B.** an **ad-hoc** rebuild voids the grant every time (DR = cdhash); a build signed with a
+> **stable identity + fixed bundle id** keeps it (DR = identifier + cert). A self-signed cert
+> suffices; a *revoked* cert makes XProtect trash the app. **Correction to this doc:** polling
+> `CGPreflightListenEventAccess()` on a timer/`didBecomeActive` does **not** see a mid-session change
+> — it is a launch-time read; relaunch or watch event flow instead.
+
 Both feed the **first-run preflight ticket (#12)** directly, and neither could be tested from an agent
 session. **They are the two things standing between this document and a complete answer.**
 
