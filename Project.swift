@@ -1,0 +1,68 @@
+import ProjectDescription
+
+// Single source of truth for the Xcode project. The generated `.xcodeproj` /
+// `.xcworkspace` are disposable (gitignored); regenerate with `tuist generate`.
+
+let bundleIdPrefix = "app.speech-logger"
+let deploymentTargets: DeploymentTargets = .macOS("15.0")
+
+// Signing (ADR-0005): a stable, self-signed identity keeps the app's designated
+// requirement constant across rebuilds, so the Input Monitoring (TCC) grant
+// survives. Create the identity with `scripts/create-signing-identity.sh`.
+//
+// These live on the app *target* base, not the project base: Tuist's recommended
+// default settings inject `CODE_SIGN_IDENTITY = -` (ad-hoc) at the target level,
+// which would shadow a project-level value and give the app a cdhash designated
+// requirement that changes on every rebuild. The macosx-scoped key is set too
+// because Xcode prefers the sdk-scoped variant when both are present.
+//
+// Sandbox is off (ADR-0002, via the entitlements file) and hardened runtime is
+// off — this is a local, non-quarantined build, never notarized.
+let appSigningSettings: SettingsDictionary = [
+    "CODE_SIGN_STYLE": "Manual",
+    "CODE_SIGN_IDENTITY": "speech-logger-selfsigned",
+    "CODE_SIGN_IDENTITY[sdk=macosx*]": "speech-logger-selfsigned",
+    "DEVELOPMENT_TEAM": "",
+    "ENABLE_HARDENED_RUNTIME": "NO",
+]
+
+let project = Project(
+    name: "SpeechLogger",
+    settings: .settings(base: ["SWIFT_VERSION": "6.0"]),
+    targets: [
+        .target(
+            name: "SpeechLogger",
+            destinations: .macOS,
+            product: .app,
+            bundleId: "\(bundleIdPrefix).SpeechLogger",
+            deploymentTargets: deploymentTargets,
+            infoPlist: .extendingDefault(with: [
+                // Accessory app: no Dock icon, menubar only.
+                "LSUIElement": true,
+                "CFBundleName": "speech logger",
+                "CFBundleDisplayName": "speech logger",
+            ]),
+            sources: ["Sources/SpeechLogger/**"],
+            entitlements: .file(path: "Support/SpeechLogger.entitlements"),
+            dependencies: [.target(name: "SpeechLoggerCore")],
+            settings: .settings(base: appSigningSettings)
+        ),
+        .target(
+            name: "SpeechLoggerCore",
+            destinations: .macOS,
+            product: .staticFramework,
+            bundleId: "\(bundleIdPrefix).SpeechLoggerCore",
+            deploymentTargets: deploymentTargets,
+            sources: ["Sources/SpeechLoggerCore/**"]
+        ),
+        .target(
+            name: "SpeechLoggerCoreTests",
+            destinations: .macOS,
+            product: .unitTests,
+            bundleId: "\(bundleIdPrefix).SpeechLoggerCoreTests",
+            deploymentTargets: deploymentTargets,
+            sources: ["Tests/SpeechLoggerCoreTests/**"],
+            dependencies: [.target(name: "SpeechLoggerCore")]
+        ),
+    ]
+)

@@ -8,3 +8,13 @@
 
 # macOS Finder metadata.
 .DS_Store
+
+# Tuist / Xcode generated artifacts. Project.swift is the source of truth;
+# the project and workspace are regenerated with `tuist generate`.
+*.xcodeproj
+*.xcworkspace
+/Derived/
+.build/
+Tuist/.build/
+*.xcuserdatad
+xcuserdata/

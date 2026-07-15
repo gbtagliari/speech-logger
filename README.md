@@ -23,7 +23,27 @@ acceptance set of real recordings.
 
 ## Status
 
-Pre-implementation. `PRD.md` is approved; there is no code yet.
+Early implementation. `PRD.md` and `SPEC.md` are approved; the project scaffold builds and
+launches as a menubar app (issue #14). The pipeline is not built yet.
+
+## Development
+
+Native Swift macOS menubar app, macOS 15+, generated with [Tuist](https://tuist.dev)
+(`Project.swift` is the source of truth; the `.xcodeproj`/`.xcworkspace` are gitignored). No
+third-party package links into the app; the heavy lifts are external binaries (ADR-0002).
+
+First-time setup and build:
+
+```sh
+scripts/create-signing-identity.sh   # one-time: self-signed cert for stable signing (ADR-0005)
+tuist generate                       # produces SpeechLogger.xcworkspace
+tuist test                           # run the test suite
+tuist build SpeechLogger             # build the app
+scripts/verify-signing.sh            # assert sandbox-off + stable designated requirement
+```
+
+The self-signed identity is what keeps the Input Monitoring grant alive across rebuilds; a
+local, non-quarantined build launches without notarization. See `docs/adr/` for the decisions.
 
 ## License
 
