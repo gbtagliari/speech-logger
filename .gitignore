@@ -4,3 +4,7 @@
 
 # Local sandbox tooling config, personal to the machine, not part of the project.
 .ai-jail
+.probe/
+
+# macOS Finder metadata.
+.DS_Store
