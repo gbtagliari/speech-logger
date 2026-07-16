@@ -41,6 +41,11 @@ let project = Project(
                 "LSUIElement": true,
                 "CFBundleName": "speech logger",
                 "CFBundleDisplayName": "speech logger",
+                // Required to record audio (AVAudioEngine triggers the mic TCC prompt).
+                // Input Monitoring (the hotkey) has no usage-description key; it is
+                // gated at runtime via CGPreflightListenEventAccess (ADR-0004).
+                "NSMicrophoneUsageDescription":
+                    "speech logger records your dictation to transcribe it locally.",
             ]),
             sources: ["Sources/SpeechLogger/**"],
             entitlements: .file(path: "Support/SpeechLogger.entitlements"),

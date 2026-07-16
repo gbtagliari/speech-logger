@@ -198,6 +198,38 @@ final class ItemStoreTests {
         }
     }
 
+    // MARK: - Discard (silent hard-remove, not Trash)
+
+    @Test("discard hard-removes a recording-stage item without going to Trash")
+    func discardHardRemoves() throws {
+        // A too-short accidental tap must not litter the log *or* the Trash.
+        let item = try store.create()
+        let dir = root.appendingPathComponent(item.id)
+        #expect(FileManager.default.fileExists(atPath: dir.path))
+        try store.discard(item.id)
+        #expect(!FileManager.default.fileExists(atPath: dir.path))
+        #expect(try store.list().isEmpty)
+    }
+
+    @Test("discarding a missing item throws itemNotFound")
+    func discardMissingThrows() {
+        #expect(throws: StoreError.itemNotFound("gone")) {
+            try store.discard("gone")
+        }
+    }
+
+    // MARK: - Content-file URL (for in-place, streamed artifacts)
+
+    @Test("contentURL points inside the item directory and requires the item to exist")
+    func contentURLResolves() throws {
+        let item = try store.create()
+        let url = try store.contentURL(of: ItemFile.audio, for: item.id)
+        #expect(url == root.appendingPathComponent(item.id).appendingPathComponent(ItemFile.audio))
+        #expect(throws: StoreError.itemNotFound("nope")) {
+            _ = try store.contentURL(of: ItemFile.audio, for: "nope")
+        }
+    }
+
     // MARK: - Boot recovery
 
     @Test("boot recovery marks every non-terminal item failed/interrupted")
