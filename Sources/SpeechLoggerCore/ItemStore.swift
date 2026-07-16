@@ -149,6 +149,25 @@ public struct ItemStore: Sendable {
         try wrap { try FileManager.default.trashItem(at: directory(for: id), resultingItemURL: nil) }
     }
 
+    /// Silently hard-remove an item's directory (not to Trash). For a too-short
+    /// accidental tap (story 32) and a `recording`-stage orphan: there is no
+    /// artifact worth keeping and it should litter neither the log nor the Trash.
+    public func discard(_ id: String) throws(StoreError) {
+        guard directoryExists(id) else { throw StoreError.itemNotFound(id) }
+        try wrap { try FileManager.default.removeItem(at: directory(for: id)) }
+    }
+
+    // MARK: - Content-file location
+
+    /// The on-disk URL of a content file inside an existing item's directory, for
+    /// callers that must write a large artifact in place (streamed) rather than
+    /// through `write(_:to:for:)`, which buffers the whole blob in memory. The
+    /// audio encode writes the mp3 here so recording never loads the wav into RAM.
+    public func contentURL(of file: String, for id: String) throws(StoreError) -> URL {
+        guard directoryExists(id) else { throw StoreError.itemNotFound(id) }
+        return fileURL(id, file)
+    }
+
     // MARK: - Boot recovery
 
     /// Recover orphans on boot: on a fresh process nothing is live, so every
