@@ -50,7 +50,11 @@ import os
         }
         let state = CaptureState(file: file)
 
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
+        // The tap fires on a realtime audio thread. Mark the block `@Sendable` so it
+        // is non-isolated: without this the compiler infers `@MainActor` isolation
+        // from the enclosing actor and the Swift 6 runtime traps (SIGTRAP) when
+        // AVFoundation invokes it off the main thread. `state` is `Sendable`.
+        input.installTap(onBus: 0, bufferSize: 4096, format: format) { @Sendable buffer, _ in
             state.append(buffer)
         }
         engine.prepare()
