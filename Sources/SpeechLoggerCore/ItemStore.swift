@@ -70,6 +70,12 @@ public struct ItemStore: Sendable {
         return try wrap { try Data(contentsOf: url) }
     }
 
+    /// Whether a content file exists — a cheap presence check used to pinpoint the
+    /// resume stage of an `organizing` item (`pass1.txt` present ⇒ resume at pass 2).
+    public func hasContent(_ file: String, for id: String) -> Bool {
+        FileManager.default.fileExists(atPath: fileURL(id, file).path)
+    }
+
     // MARK: - Transitions
 
     /// Recording finished: move to `queued` and stamp the recording `duration`.
@@ -108,6 +114,25 @@ public struct ItemStore: Sendable {
     /// Terminal off-ramp: the user stopped the item at `stage`.
     public func cancel(_ id: String, stage: Stage) throws(StoreError) -> ItemMeta {
         try persist(try meta(for: id).cancelling(stage: stage, at: now()), for: id)
+    }
+
+    // MARK: - Retry re-entry
+
+    /// Retry from the transcription stage: move a `failed`/`cancelled` item back to
+    /// `queued` so the serial lane re-transcribes it, reusing the retained
+    /// `audio.mp3`. Preserves the recording `duration`; clears the error/stoppedAt
+    /// (the happy path is being re-entered). No auto-retry — the caller is a click.
+    public func requeueForRetry(_ id: String) throws(StoreError) -> ItemMeta {
+        try persist(try meta(for: id).advancing(to: .queued, at: now()), for: id)
+    }
+
+    /// Retry from an organization stage: move a `failed`/`cancelled` item back to the
+    /// `transcribing` handoff state so the parallel lane re-runs the passes, reusing
+    /// the retained `transcript.txt` (and `pass1.txt` for a pass-2 resume). The lane's
+    /// `transcribing` guard is the handoff contract, so retry re-enters through it
+    /// rather than a bespoke state. Clears the error/stoppedAt.
+    public func resumeForOrganizing(_ id: String) throws(StoreError) -> ItemMeta {
+        try persist(try meta(for: id).advancing(to: .transcribing, at: now()), for: id)
     }
 
     // MARK: - Read
@@ -177,7 +202,7 @@ public struct ItemStore: Sendable {
     public func recoverOrphans() throws(StoreError) -> [Item] {
         var recovered: [Item] = []
         for item in try items() where !item.meta.state.isTerminal {
-            let stage = recoveryStage(for: item.meta.state)
+            let stage = recoveryStage(for: item.meta.state, id: item.id)
             let meta = try fail(item.id, stage: stage, reason: .interrupted, detail: "recovered on boot")
             recovered.append(Item(id: item.id, meta: meta))
         }
@@ -201,14 +226,15 @@ public struct ItemStore: Sendable {
     }
 
     /// Which stage a non-terminal state died in, for a recovered orphan. An
-    /// `organizing` death is recorded at `pass1`, the entry of organization;
-    /// pinpointing pass 1 vs pass 2 from surviving artifacts is a retry concern
-    /// (a later ticket), not the storage substrate's.
-    private func recoveryStage(for state: ItemState) -> Stage {
+    /// `organizing` death is pinpointed from the surviving artifacts so retry
+    /// resumes from the right pass (#22): `pass1.txt` on disk means pass 1 finished
+    /// and pass 2 was interrupted (resume at `pass2`, reusing the pivot); its absence
+    /// means pass 1 itself was interrupted (resume at `pass1`, reusing the transcript).
+    private func recoveryStage(for state: ItemState, id: String) -> Stage {
         switch state {
         case .recording: return .recording
         case .queued, .transcribing: return .transcription
-        case .organizing: return .pass1
+        case .organizing: return hasContent(ItemFile.pass1, for: id) ? .pass2 : .pass1
         case .organized, .failed, .cancelled:
             return .recording // unreachable: callers filter terminal states first
         }

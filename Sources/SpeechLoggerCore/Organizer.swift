@@ -137,56 +137,27 @@ public struct ClaudeOrganizer: Organizing {
 
     /// Run one pass: launch `claude`, feed `input` on stdin, await exit, and gate the
     /// result through `outcome`. Runs off the calling actor so a pass (network-bound,
-    /// seconds long, and with no built-in timeout on a dead network) never blocks it.
+    /// seconds long, and with no built-in timeout on a dead network) never blocks it,
+    /// and is killed if the enclosing task is cancelled — the manual "stop" and the
+    /// graceful quit are the answer to that hang, not an app-imposed timeout (SPEC).
     private func run(prompt: String, input: String, stage: Stage) async throws(OrganizationError) -> String {
-        let claude = claude
         let environment = Self.environment(base: ProcessInfo.processInfo.environment)
         let arguments = Self.arguments(systemPrompt: prompt)
-        let result: (rc: Int32, stdout: Data, stderr: String)
+        let result: SubprocessResult
         do {
-            result = try await withCheckedThrowingContinuation {
-                (continuation: CheckedContinuation<(rc: Int32, stdout: Data, stderr: String), Error>) in
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: claude)
-                process.arguments = arguments
-                process.environment = environment
-                let stdinPipe = Pipe()
-                let stdoutPipe = Pipe()
-                let stderrPipe = Pipe()
-                process.standardInput = stdinPipe
-                process.standardOutput = stdoutPipe
-                process.standardError = stderrPipe
-                process.terminationHandler = { finished in
-                    // stdout is the JSON payload (small at `--effort low`, ~2 KB, well
-                    // under the pipe buffer), read whole after exit like the sibling
-                    // shell-outs read their stderr.
-                    let out = (try? stdoutPipe.fileHandleForReading.readToEnd()) ?? Data()
-                    let errData = (try? stderrPipe.fileHandleForReading.readToEnd()) ?? Data()
-                    let err = String(decoding: errData, as: UTF8.self)
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    continuation.resume(returning: (finished.terminationStatus, out, String(err.suffix(2000))))
-                }
-                do {
-                    try process.run()
-                    // Feed the transcript on stdin and close it. The input is a few KB
-                    // (under the pipe buffer), so this write never blocks on the reader.
-                    let handle = stdinPipe.fileHandleForWriting
-                    try? handle.write(contentsOf: Data(input.utf8))
-                    try? handle.close()
-                } catch {
-                    continuation.resume(throwing: OrganizationError.failed(
-                        stage: stage, reason: .missingBinary, detail: "\(error)"))
-                }
-            }
-        } catch let error as OrganizationError {
-            throw error
+            result = try await runSubprocess(
+                executable: claude, arguments: arguments, environment: environment,
+                stdin: Data(input.utf8))
         } catch {
-            // Unreachable: the continuation only throws `missingBinary`. Present so the
-            // untyped continuation collapses back to the typed throw.
             throw OrganizationError.failed(stage: stage, reason: .missingBinary, detail: "\(error)")
         }
 
-        switch Self.outcome(rc: result.rc, stdout: result.stdout, stderr: result.stderr, stage: stage) {
+        let stderr = String(decoding: result.stderr, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        switch Self.outcome(
+            rc: result.terminationStatus, stdout: result.stdout,
+            stderr: String(stderr.suffix(2000)), stage: stage
+        ) {
         case .success(let text): return text
         case .failure(let error): throw error
         }

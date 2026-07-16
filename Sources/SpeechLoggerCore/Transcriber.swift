@@ -129,41 +129,23 @@ public struct Transcriber: Transcribing {
     /// failure); the caller judges success by the output file. stderr is *not* a
     /// failure signal either (it holds a HuggingFace progress bar even on success),
     /// so it is captured only to enrich a later `emptyOutput` diagnosis, never tested.
-    /// Runs off the calling actor so a long transcription never blocks it. Throws
-    /// `launchFailed` only if the process cannot start.
+    /// Runs off the calling actor so a long transcription never blocks it, and is
+    /// killed if the enclosing task is cancelled (stop / quit). Throws `launchFailed`
+    /// only if the process cannot start.
     private func run(arguments: [String]) async throws(TranscriptionError) -> String {
-        let mlxWhisper = mlxWhisper
         let environment = Self.environment(
             base: ProcessInfo.processInfo.environment, ffmpegDir: ffmpegDir)
+        let result: SubprocessResult
         do {
-            return try await withCheckedThrowingContinuation {
-                (continuation: CheckedContinuation<String, Error>) in
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: mlxWhisper)
-                process.arguments = arguments
-                process.environment = environment
-                let stderrPipe = Pipe()
-                process.standardOutput = FileHandle.nullDevice
-                process.standardError = stderrPipe
-                process.terminationHandler = { _ in
-                    let data = (try? stderrPipe.fileHandleForReading.readToEnd()) ?? Data()
-                    // Cap the tail so a runaway log never bloats meta.json.
-                    let stderr = String(decoding: data, as: UTF8.self)
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    continuation.resume(returning: String(stderr.suffix(2000)))
-                }
-                do {
-                    try process.run()
-                } catch {
-                    continuation.resume(throwing: TranscriptionError.launchFailed("\(error)"))
-                }
-            }
-        } catch let error as TranscriptionError {
-            throw error
+            result = try await runSubprocess(
+                executable: mlxWhisper, arguments: arguments, environment: environment,
+                discardStdout: true)
         } catch {
-            // Unreachable: the continuation only ever throws `launchFailed`. Present
-            // so the untyped continuation collapses back to the typed throw.
             throw TranscriptionError.launchFailed("\(error)")
         }
+        // Cap the tail so a runaway log never bloats meta.json.
+        let stderr = String(decoding: result.stderr, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(stderr.suffix(2000))
     }
 }

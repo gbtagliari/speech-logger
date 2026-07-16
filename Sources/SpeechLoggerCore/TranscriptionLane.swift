@@ -28,6 +28,11 @@ public actor TranscriptionLane {
     /// awaits it. One task drains the whole backlog, so a burst of `enqueue`s never
     /// spawns a second lane.
     private var drainTask: Task<Void, Never>?
+    /// The item currently transcribing, and the task running it. The drain runs each
+    /// item in its own child task so `cancel`/`shutdown` can kill just the in-flight
+    /// transcription (terminating `mlx_whisper`) without tearing down the whole lane.
+    private var currentID: String?
+    private var currentTask: Task<Void, Never>?
 
     public init(
         store: ItemStore,
@@ -51,17 +56,51 @@ public actor TranscriptionLane {
     }
 
     /// Await the lane going idle (the current backlog fully processed). Used by tests
-    /// and, later, by graceful quit.
+    /// and by graceful quit.
     public func waitUntilIdle() async {
         await drainTask?.value
     }
 
-    /// Process the backlog one item at a time until empty. Clearing `drainTask`
-    /// happens with no suspension after the queue is observed empty, so a concurrent
-    /// `enqueue` cannot be lost between the check and the clear (actor non-reentrancy).
+    /// Stop one item (the manual "stop processing" control, story 30). A still-`queued`
+    /// item is dropped from the backlog and marked `cancelled` directly (no process to
+    /// kill). The in-flight `transcribing` item is stopped by cancelling its task,
+    /// which terminates `mlx_whisper`; `process` then records the `cancelled` state.
+    /// An id this lane does not own (already organizing, or gone) is a no-op — the
+    /// controller also asks the organization lane, and the owner acts.
+    public func cancel(_ id: String) {
+        if id == currentID {
+            currentTask?.cancel()
+            return
+        }
+        guard queue.contains(id) else { return }
+        queue.removeAll { $0 == id }
+        _ = try? store.cancel(id, stage: .transcription)
+        onStateChange?()
+    }
+
+    /// Graceful quit: kill the in-flight transcription (terminates `mlx_whisper`) and
+    /// drop the backlog. Never blocks — it sends the terminate signal and returns,
+    /// leaving the process to die on its own (ADR-0006, "quit never blocks"). The
+    /// controller has already marked the affected items `cancelled`.
+    public func shutdown() {
+        currentTask?.cancel()
+        queue.removeAll()
+    }
+
+    /// Process the backlog one item at a time until empty. Each item runs in its own
+    /// child task (recorded as `currentTask`) so a per-item `cancel` can kill just it;
+    /// the drain awaits that task before taking the next id, preserving serial order.
+    /// Clearing `drainTask` happens with no suspension after the queue is observed
+    /// empty, so a concurrent `enqueue` cannot be lost between the check and the clear
+    /// (actor non-reentrancy).
     private func drain() async {
         while let id = next() {
-            await process(id)
+            currentID = id
+            let task = Task { await self.process(id) }
+            currentTask = task
+            await task.value
+            currentID = nil
+            currentTask = nil
         }
         drainTask = nil
     }
@@ -81,14 +120,23 @@ public actor TranscriptionLane {
             let transcript = try store.contentURL(of: ItemFile.transcript, for: id)
             try await transcriber.transcribe(audio: audio, to: transcript)
             // Success: the transcript is on disk and the item is `transcribing`.
-            // Hand off to organization (a later ticket) rather than advancing here.
+            // Hand off to organization rather than advancing here.
             onTranscribed?(id)
-        } catch let error as TranscriptionError {
-            fail(id, error)
-            onStateChange?()
         } catch {
-            // A store error mid-transition (e.g. the item directory vanished).
-            _ = try? store.fail(id, stage: .transcription, reason: .cliError, detail: "\(error)")
+            // A cancelled task (stop / quit) killed `mlx_whisper`, surfacing as a
+            // transcription/store error. Record `cancelled`, not `failed` — unless
+            // something already moved the item terminal (quit marks it synchronously),
+            // which we must not clobber.
+            if Task.isCancelled {
+                if let meta = try? store.meta(for: id), !meta.state.isTerminal {
+                    _ = try? store.cancel(id, stage: .transcription)
+                }
+            } else if let error = error as? TranscriptionError {
+                fail(id, error)
+            } else {
+                // A store error mid-transition (e.g. the item directory vanished).
+                _ = try? store.fail(id, stage: .transcription, reason: .cliError, detail: "\(error)")
+            }
             onStateChange?()
         }
     }

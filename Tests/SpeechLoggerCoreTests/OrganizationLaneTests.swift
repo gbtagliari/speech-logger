@@ -145,6 +145,62 @@ struct OrganizationLaneTests {
         for id in ids { #expect(try store.meta(for: id).state == .organized) }
     }
 
+    // MARK: - Cancellation (the manual "stop" and graceful quit)
+
+    @Test(
+        "stopping an organizing item marks it cancelled at the pass that was running",
+        arguments: [Stage.pass1, Stage.pass2])
+    func cancelOrganizingItem(blockOn: Stage) async throws {
+        let store = try makeStore()
+        let id = try transcribedItem(in: store, transcript: "algo")
+        let lane = OrganizationLane(store: store, organizer: BlockingOrganizer(blockOn: blockOn))
+
+        await lane.organize(id)
+        try await waitUntil { (try? store.meta(for: id))?.state == .organizing }
+        await lane.cancel(id)
+        await lane.waitUntilIdle()
+
+        let meta = try store.meta(for: id)
+        #expect(meta.state == .cancelled)  // cancelled, never failed
+        #expect(meta.stoppedAt?.stage == blockOn)
+    }
+
+    // MARK: - Retry resume (#22)
+
+    @Test("resuming at pass2 reuses the retained pass1 pivot and never re-annotates")
+    func resumeAtPass2ReusesPivot() async throws {
+        let store = try makeStore()
+        let id = try transcribedItem(in: store, transcript: "irrelevante para o pass2")
+        // A prior attempt left the annotated pivot on disk.
+        try store.write(Data("PIVOT".utf8), to: ItemFile.pass1, for: id)
+        let organizer = RecordingOrganizer()
+        let lane = OrganizationLane(store: store, organizer: organizer)
+
+        await lane.organize(id, from: .pass2)
+        await lane.waitUntilIdle()
+
+        #expect(await organizer.annotateCalls == 0)  // pass 1 skipped
+        #expect(await organizer.rewriteInputs == ["PIVOT"])  // rewrote the retained pivot
+        #expect(try store.meta(for: id).state == .organized)
+        #expect(try store.finalText(for: id) == FakeOrganizer.rewritten("PIVOT"))
+    }
+
+    @Test("a pass2 resume with no retained pivot fails at pass2, never silently re-annotating")
+    func resumeAtPass2WithoutPivotFails() async throws {
+        let store = try makeStore()
+        let id = try transcribedItem(in: store, transcript: "tem transcrição mas não tem pivô")
+        let organizer = RecordingOrganizer()
+        let lane = OrganizationLane(store: store, organizer: organizer)
+
+        await lane.organize(id, from: .pass2)
+        await lane.waitUntilIdle()
+
+        let meta = try store.meta(for: id)
+        #expect(meta.state == .failed)
+        #expect(meta.error?.stage == .pass2)
+        #expect(await organizer.annotateCalls == 0)  // never fell back to re-annotating
+    }
+
     // MARK: - End-to-end (real claude against a real sample transcript)
 
     @Test(
@@ -241,6 +297,63 @@ private actor CountingOrganizer: Organizing {
         calls += 1
         return annotated
     }
+}
+
+/// Blocks in the named pass until its task is cancelled, then throws as a killed
+/// `claude` would (non-JSON → `cliError`) carrying that pass's stage. Stands in for a
+/// long pass that `cancel`/`shutdown` terminates.
+private struct BlockingOrganizer: Organizing {
+    let blockOn: Stage
+    func annotate(_ transcript: String) async throws(OrganizationError) -> String {
+        if blockOn == .pass1 {
+            await blockUntilCancelled()
+            throw .failed(stage: .pass1, reason: .cliError, detail: "cancelled")
+        }
+        return FakeOrganizer.annotated(transcript)
+    }
+    func rewrite(_ annotated: String) async throws(OrganizationError) -> String {
+        if blockOn == .pass2 {
+            await blockUntilCancelled()
+            throw .failed(stage: .pass2, reason: .cliError, detail: "cancelled")
+        }
+        return FakeOrganizer.rewritten(annotated)
+    }
+}
+
+/// Records which passes ran (and their inputs), so a resume test can prove pass 1 was
+/// skipped and pass 2 rewrote the retained pivot.
+private actor RecordingOrganizer: Organizing {
+    private(set) var annotateCalls = 0
+    private(set) var rewriteInputs: [String] = []
+    func annotate(_ transcript: String) async throws(OrganizationError) -> String {
+        annotateCalls += 1
+        return FakeOrganizer.annotated(transcript)
+    }
+    func rewrite(_ annotated: String) async throws(OrganizationError) -> String {
+        rewriteInputs.append(annotated)
+        return FakeOrganizer.rewritten(annotated)
+    }
+}
+
+/// Yield until the current task is cancelled — the co-operative block the cancellation
+/// fakes use to stand in for a long-running shell-out.
+private func blockUntilCancelled() async {
+    while !Task.isCancelled { await Task.yield() }
+}
+
+/// Poll `condition` until it holds or the timeout elapses (then throw). Waits for the
+/// lane to reach a state before acting on it, without a fixed sleep.
+private func waitUntil(
+    timeout: Double = 5,
+    _ condition: @escaping @Sendable () async -> Bool
+) async throws {
+    let deadline = ContinuousClock.now + .seconds(timeout)
+    while ContinuousClock.now < deadline {
+        if await condition() { return }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    struct WaitTimeout: Error {}
+    throw WaitTimeout()
 }
 
 /// A one-shot barrier: `arriveAndWait` blocks each caller until `expected` callers

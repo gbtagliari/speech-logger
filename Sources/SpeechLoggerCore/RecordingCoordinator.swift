@@ -116,6 +116,20 @@ public protocol AudioEncoding: Sendable {
         await process(id: id, capture: capture)
     }
 
+    /// Discard an in-progress recording silently (graceful quit, story 35 / ADR-0006):
+    /// stop the mic, throw the capture away, and hard-remove the item. A recording has
+    /// nothing to resume, so it leaves no `cancelled` off-ramp and no Trash entry —
+    /// just as a too-short tap does. A call while not recording is a no-op.
+    public func discardIfRecording() {
+        guard isRecording, let id = currentItemID else { return }
+        isRecording = false
+        currentItemID = nil
+        let capture = recorder.stop()
+        try? FileManager.default.removeItem(at: capture.wav)
+        try? store.discard(id)
+        onStateChange?()
+    }
+
     /// Apply the dual guard, then encode-and-queue, discard, or fail. The temp wav
     /// is always removed on the way out — the mp3 is the retained artifact.
     private func process(id: String, capture: RecordingCapture) async {

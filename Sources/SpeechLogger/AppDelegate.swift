@@ -15,10 +15,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: RecordingCoordinator?
     private var transcriptionLane: TranscriptionLane?
     private var organizationLane: OrganizationLane?
+    private var pipelineController: PipelineController?
     private var hotkeyMonitor: HotkeyMonitor?
     private var menubar: MenubarController?
     /// True when Input Monitoring is not granted; drives the degraded glyph.
     private var needsPermission = false
+    /// Set once the graceful-quit sweep is running, so a re-entrant terminate request
+    /// falls straight through instead of starting a second sweep.
+    private var isQuitting = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Warm the microphone grant so the first hotkey recording is not lost to a
@@ -43,12 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menubar.viewModel.onQuit = { NSApp.terminate(nil) }
         menubar.viewModel.onCopy = { [weak self] id in self?.copyFinalText(of: id) }
         menubar.viewModel.onDelete = { [weak self] id in self?.deleteItem(id) }
-        menubar.viewModel.onRetry = { [weak self] id in
-            // Retry orchestration (resume from the failed/stopped stage, reusing
-            // artifacts) is owned by #22; the button is present per the panel spec
-            // but does not yet re-run the pipeline (SPEC "Retry", story 29).
-            self?.log.info("retry requested for \(id, privacy: .public) — not yet wired")
-        }
+        menubar.viewModel.onRetry = { [weak self] id in self?.pipelineController?.retry(id) }
+        menubar.viewModel.onStop = { [weak self] id in self?.pipelineController?.stop(id) }
         self.menubar = menubar
 
         // The unbounded parallel organization lane (ADR-0001, ADR-0006): drip-fed by
@@ -80,11 +80,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.coordinator = coordinator
 
+        // The cross-cutting control of in-flight work (#22, ADR-0006): manual stop,
+        // resume-from-stage retry, and the graceful quit. It routes each control to
+        // whichever lane owns the item; its own state writes (a retry's re-entry, the
+        // quit sweep) fire `onStateChange` so the menubar recomputes.
+        let controller = PipelineController(
+            store: store, recording: coordinator,
+            transcription: lane, organization: organizationLane)
+        controller.onStateChange = { [weak self] in self?.refresh() }
+        self.pipelineController = controller
+
         let hotkeyMonitor = HotkeyMonitor(onToggle: { [weak coordinator] in coordinator?.toggle() })
         self.hotkeyMonitor = hotkeyMonitor
 
         installHotkey()
         refresh()
+    }
+
+    /// Graceful quit that never blocks (story 35, ADR-0006). Defer termination just
+    /// long enough for the controller to discard an in-progress recording and mark
+    /// in-flight processing `cancelled` (durable store writes) and to send each
+    /// subprocess SIGTERM — it does *not* wait for the processes to die, so the user is
+    /// never blocked. A re-entrant request (or no controller yet) terminates at once.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let controller = pipelineController, !isQuitting else { return .terminateNow }
+        isQuitting = true
+        Task { @MainActor in
+            await controller.quitGracefully()
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {

@@ -55,7 +55,10 @@ struct PanelView: View {
         if !viewModel.model.live.isEmpty {
             SectionLabel(title: "Acontecendo agora", count: viewModel.model.live.count)
             ForEach(viewModel.model.live) { row in
-                LiveRowView(row: row, recordingSeconds: viewModel.recordingSeconds)
+                LiveRowView(
+                    row: row,
+                    recordingSeconds: viewModel.recordingSeconds,
+                    onStop: { viewModel.onStop(row.id) })
             }
         }
     }
@@ -159,6 +162,8 @@ private struct SectionLabel: View {
 private struct LiveRowView: View {
     let row: PanelModel.LiveRow
     let recordingSeconds: Int
+    let onStop: () -> Void
+    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -167,12 +172,24 @@ private struct LiveRowView: View {
                 Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(labelColor)
                 progressBar
             }
-            if case .recording = row.kind {
-                Text(clock).font(.system(size: 12, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(.red)
-            }
+            trailing
         }
         .padding(.horizontal, 13).padding(.vertical, 8)
+        .background(hovering ? Color.primary.opacity(0.05) : .clear)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+    }
+
+    /// The recording clock (recording is stopped by the hotkey, so it carries no stop
+    /// control); every other live kind is a processing item with a hover-revealed
+    /// "stop processing" button (story 30).
+    @ViewBuilder private var trailing: some View {
+        if case .recording = row.kind {
+            Text(clock).font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.red)
+        } else if hovering {
+            IconButton(systemName: "stop.fill", help: "parar", action: onStop)
+        }
     }
 
     private var label: String { row.label }

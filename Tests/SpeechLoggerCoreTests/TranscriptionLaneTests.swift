@@ -97,6 +97,67 @@ struct TranscriptionLaneTests {
         #expect(try store.meta(for: item.id).state == .cancelled)  // left untouched
     }
 
+    // MARK: - Cancellation (the manual "stop" and graceful quit)
+
+    @Test("stopping the transcribing item marks it cancelled at the transcription stage")
+    func cancelTranscribingItem() async throws {
+        let store = try makeStore()
+        let id = try queuedItem(in: store)
+        // A transcriber that blocks until its task is cancelled, standing in for a
+        // long `mlx_whisper` run that `cancel` terminates.
+        let lane = TranscriptionLane(store: store, transcriber: BlockingTranscriber())
+
+        await lane.enqueue(id)
+        try await waitUntil { (try? store.meta(for: id))?.state == .transcribing }
+        await lane.cancel(id)
+        await lane.waitUntilIdle()
+
+        let meta = try store.meta(for: id)
+        #expect(meta.state == .cancelled)  // cancelled, never failed
+        #expect(meta.stoppedAt?.stage == .transcription)
+    }
+
+    @Test("stopping a queued item drops it from the lane and marks it cancelled, never transcribed")
+    func cancelQueuedItem() async throws {
+        let store = try makeStore()
+        let blocker = try queuedItem(in: store)  // occupies the serial lane
+        let waiting = try queuedItem(in: store)  // sits behind it in `queued`
+        let log = CallLog()
+        let lane = TranscriptionLane(store: store, transcriber: BlockingTranscriber(log: log))
+
+        await lane.enqueue(blocker)
+        await lane.enqueue(waiting)
+        try await waitUntil { (try? store.meta(for: blocker))?.state == .transcribing }
+
+        await lane.cancel(waiting)  // still queued behind the blocker
+        #expect(try store.meta(for: waiting).state == .cancelled)
+        #expect(try store.meta(for: waiting).stoppedAt?.stage == .transcription)
+
+        await lane.cancel(blocker)  // release the lane so the test can finish
+        await lane.waitUntilIdle()
+        #expect(await log.order == [blocker])  // the cancelled item never transcribed
+    }
+
+    @Test("shutdown stops the in-flight transcription and drops the backlog (quit never blocks)")
+    func shutdownStopsLane() async throws {
+        let store = try makeStore()
+        let blocker = try queuedItem(in: store)
+        let waiting = try queuedItem(in: store)
+        let lane = TranscriptionLane(store: store, transcriber: BlockingTranscriber())
+
+        await lane.enqueue(blocker)
+        await lane.enqueue(waiting)
+        try await waitUntil { (try? store.meta(for: blocker))?.state == .transcribing }
+
+        await lane.shutdown()
+        await lane.waitUntilIdle()  // returns promptly: the blocker was killed
+
+        // The in-flight item is cancelled; the dropped backlog item is left untouched
+        // (the controller marks queued items on quit, not the lane's shutdown).
+        #expect(try store.meta(for: blocker).state == .cancelled)
+        #expect(try store.meta(for: waiting).state == .queued)
+    }
+
     // MARK: - End-to-end (real mlx_whisper against a real sample)
 
     @Test(
@@ -174,6 +235,35 @@ private struct FakeTranscriber: Transcribing {
 private struct ThrowingTranscriber: Transcribing {
     let error: TranscriptionError
     func transcribe(audio: URL, to transcript: URL) async throws(TranscriptionError) { throw error }
+}
+
+/// Blocks until its task is cancelled, then throws as a killed `mlx_whisper` would
+/// (no output file). Stands in for a long transcription that `cancel`/`shutdown`
+/// terminates, so the lane's cancellation path is exercised without the binary.
+private struct BlockingTranscriber: Transcribing {
+    let log: CallLog?
+    init(log: CallLog? = nil) { self.log = log }
+
+    func transcribe(audio: URL, to transcript: URL) async throws(TranscriptionError) {
+        if let log { await log.begin(transcript.deletingLastPathComponent().lastPathComponent) }
+        while !Task.isCancelled { await Task.yield() }
+        throw TranscriptionError.emptyOutput(detail: "cancelled")
+    }
+}
+
+/// Poll `condition` until it holds or the timeout elapses (then throw). Used to wait
+/// for the lane to actually reach a state before acting on it, without a fixed sleep.
+private func waitUntil(
+    timeout: Double = 5,
+    _ condition: @escaping @Sendable () async -> Bool
+) async throws {
+    let deadline = ContinuousClock.now + .seconds(timeout)
+    while ContinuousClock.now < deadline {
+        if await condition() { return }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    struct WaitTimeout: Error {}
+    throw WaitTimeout()
 }
 
 /// A thread-safe sink for the lane's callbacks (they fire synchronously on the actor).

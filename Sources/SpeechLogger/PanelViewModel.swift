@@ -19,9 +19,10 @@ final class PanelViewModel: ObservableObject {
     var onCopy: (String) -> Void = { _ in }
     /// Send an item to the macOS Trash (stories 25, 26).
     var onDelete: (String) -> Void = { _ in }
-    /// Retry a failed/cancelled item. Wired to a no-op this ticket; the resume
-    /// orchestration is a follow-up (SPEC "Retry", story 29).
+    /// Retry a failed/cancelled item from the stage it died at (story 29).
     var onRetry: (String) -> Void = { _ in }
+    /// Stop an in-flight processing item — queued/transcribing/organizing (story 30).
+    var onStop: (String) -> Void = { _ in }
     /// Deep-link to the Input Monitoring pane (degraded state).
     var onOpenSettings: () -> Void = {}
     var onQuit: () -> Void = {}

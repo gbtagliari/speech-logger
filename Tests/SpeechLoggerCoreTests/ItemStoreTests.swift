@@ -281,10 +281,10 @@ final class ItemStoreTests {
         #expect(recovered[0].isRetryable)
     }
 
-    @Test("an organizing orphan is recovered at the pass1 stage and is retryable")
-    func organizingOrphanRecoveredAtPass1() throws {
-        // The substrate records organization death at pass1, its entry point;
-        // pinpointing pass1 vs pass2 for resume is a retry concern, not storage.
+    @Test("an organizing orphan with no pass1 pivot is recovered at pass1 (resume re-annotates)")
+    func organizingOrphanWithoutPivotRecoveredAtPass1() throws {
+        // No `pass1.txt` on disk: pass 1 itself was interrupted, so resume re-runs it
+        // from the transcript.
         let item = try store.create()
         _ = try store.markQueued(item.id, duration: 1)
         _ = try store.markTranscribing(item.id)
@@ -292,5 +292,68 @@ final class ItemStoreTests {
         let recovered = try store.recoverOrphans()
         #expect(recovered[0].meta.error?.stage == .pass1)
         #expect(recovered[0].isRetryable)
+    }
+
+    @Test("an organizing orphan with a pass1 pivot is recovered at pass2 (resume reuses the pivot)")
+    func organizingOrphanWithPivotRecoveredAtPass2() throws {
+        // `pass1.txt` exists: pass 1 finished and pass 2 was interrupted, so resume
+        // must skip annotate and rewrite from the retained pivot (#22).
+        let item = try store.create()
+        _ = try store.markQueued(item.id, duration: 1)
+        _ = try store.markTranscribing(item.id)
+        _ = try store.markOrganizing(item.id)
+        try store.write(Data("annotated pivot".utf8), to: ItemFile.pass1, for: item.id)
+        let recovered = try store.recoverOrphans()
+        #expect(recovered[0].meta.error?.stage == .pass2)
+        #expect(recovered[0].isRetryable)
+    }
+
+    // MARK: - Retry re-entry (#22)
+
+    @Test("requeueForRetry moves a failed item back to queued, preserving duration and clearing error")
+    func requeueForRetryReenters() throws {
+        let item = try store.create()
+        _ = try store.markQueued(item.id, duration: 12.5)
+        _ = try store.markTranscribing(item.id)
+        _ = try store.fail(item.id, stage: .transcription, reason: .cliError, detail: "boom")
+
+        let meta = try store.requeueForRetry(item.id)
+        #expect(meta.state == .queued)
+        #expect(meta.error == nil)  // the happy path is re-entered
+        #expect(meta.duration == 12.5)  // the recording length survives, audio is reused
+    }
+
+    @Test("resumeForOrganizing moves a failed item back to the transcribing handoff, clearing error")
+    func resumeForOrganizingReenters() throws {
+        let item = try store.create()
+        _ = try store.markQueued(item.id, duration: 3)
+        _ = try store.markTranscribing(item.id)
+        _ = try store.markOrganizing(item.id)
+        _ = try store.fail(item.id, stage: .pass2, reason: .cliError, detail: "boom")
+
+        let meta = try store.resumeForOrganizing(item.id)
+        #expect(meta.state == .transcribing)  // the lane's handoff guard consumes this
+        #expect(meta.error == nil)
+    }
+
+    @Test("resumeForOrganizing clears a cancelled item's stoppedAt on re-entry")
+    func resumeClearsStoppedAt() throws {
+        let item = try store.create()
+        _ = try store.markQueued(item.id, duration: 3)
+        _ = try store.markTranscribing(item.id)
+        _ = try store.markOrganizing(item.id)
+        _ = try store.cancel(item.id, stage: .pass1)
+
+        let meta = try store.resumeForOrganizing(item.id)
+        #expect(meta.state == .transcribing)
+        #expect(meta.stoppedAt == nil)
+    }
+
+    @Test("hasContent reports whether a stage artifact is on disk")
+    func hasContentDetectsArtifacts() throws {
+        let item = try store.create()
+        #expect(!store.hasContent(ItemFile.pass1, for: item.id))
+        try store.write(Data("pivot".utf8), to: ItemFile.pass1, for: item.id)
+        #expect(store.hasContent(ItemFile.pass1, for: item.id))
     }
 }
