@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pipelineController: PipelineController?
     private var hotkeyMonitor: HotkeyMonitor?
     private var menubar: MenubarController?
+    private var readyNotifier: ReadyNotifier?
     /// True when Input Monitoring is not granted; drives the degraded glyph.
     private var needsPermission = false
     /// Set once the graceful-quit sweep is running, so a re-entrant terminate request
@@ -51,6 +52,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menubar.viewModel.onStop = { [weak self] id in self?.pipelineController?.stop(id) }
         menubar.viewModel.onOpenFolder = { [weak self] id in self?.openFolder(of: id) }
         self.menubar = menubar
+
+        // The ready signal (stories 21, 27): one notification per organized item, with
+        // a `Copiar` that copies straight from the banner. Authorization is asked for
+        // at launch so the first ready item is not lost to a pending prompt; a denial
+        // degrades to the panel and never blocks the pipeline.
+        let readyNotifier = ReadyNotifier()
+        readyNotifier.onCopy = { [weak self] id in self?.copyFinalText(of: id) }
+        readyNotifier.requestAuthorization()
+        self.readyNotifier = readyNotifier
 
         // The unbounded parallel organization lane (ADR-0001, ADR-0006): drip-fed by
         // the transcription lane, it runs the two `claude` passes (`organizing` ->
@@ -164,6 +174,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menubar?.updatePanel(model, needsPermission: needsPermission)
     }
 
+    /// Raise the ready notification for a just-organized item (stories 21, 27). Fired
+    /// once per item by the organization lane, on reaching `organized`.
+    ///
+    /// An unreadable final text still notifies (on the fallback body): the read is the
+    /// banner's preview, not its purpose, and losing the ready signal over it would
+    /// leave the item silently done. `Copiar` re-reads the store at tap time.
+    private func notifyReady(_ id: String) {
+        guard let store, let readyNotifier else { return }
+        let preview: String
+        do {
+            // nil means the item is no longer `organized` — deleted between the lane's
+            // callback and this read. Then there is nothing left to announce.
+            guard let text = try store.finalText(for: id) else { return }
+            preview = text
+        } catch {
+            log.error(
+                "ready notification has no preview text for \(id, privacy: .public): \(String(describing: error))")
+            preview = ""
+        }
+        readyNotifier.notifyReady(id: id, finalText: preview)
+    }
+
     /// Copy an organized item's final pass-2 text to the clipboard (story 22). Only
     /// `organized` items return text, so nothing partial is ever copyable as final.
     private func copyFinalText(of id: String) {
@@ -201,8 +233,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// load — a build/packaging error, never expected at runtime — organization is
     /// disabled (nil): transcribed items rest at `transcribing` rather than every one
     /// failing on a missing prompt, and preflight (a later ticket) surfaces the cause.
-    /// When wired, the lane advances `organizing` -> `organized` and, later, will
-    /// raise the ready notification via `onOrganized`.
+    /// When wired, the lane advances `organizing` -> `organized` and raises the ready
+    /// notification via `onOrganized`.
     private func makeOrganizationLane(store: ItemStore) -> OrganizationLane? {
         let prompts: Prompts
         do {
@@ -216,7 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             organizer: ClaudeOrganizer(prompts: prompts),
             onStateChange: { [weak self] in Task { @MainActor in self?.refresh() } },
             onOrganized: { [weak self] id in
-                Task { @MainActor in self?.log.info("organized \(id, privacy: .public)") }
+                Task { @MainActor in self?.notifyReady(id) }
             })
     }
 
