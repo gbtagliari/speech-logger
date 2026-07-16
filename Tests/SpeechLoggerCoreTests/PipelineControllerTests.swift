@@ -258,17 +258,3 @@ private final class Clock: @unchecked Sendable {
         return current
     }
 }
-
-/// Poll `condition` until it holds or the timeout elapses (then throw).
-private func waitUntil(
-    timeout: Double = 5,
-    _ condition: @escaping @Sendable () async -> Bool
-) async throws {
-    let deadline = ContinuousClock.now + .seconds(timeout)
-    while ContinuousClock.now < deadline {
-        if await condition() { return }
-        try await Task.sleep(for: .milliseconds(5))
-    }
-    struct WaitTimeout: Error {}
-    throw WaitTimeout()
-}

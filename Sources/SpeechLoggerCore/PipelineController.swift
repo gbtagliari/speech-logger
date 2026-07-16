@@ -103,8 +103,7 @@ import Foundation
                 _ = try? store.cancel(item.id, stage: .transcription)
             case .organizing:
                 // Pinpoint the pass from the surviving pivot so retry resumes right.
-                let stage: Stage = store.hasContent(ItemFile.pass1, for: item.id) ? .pass2 : .pass1
-                _ = try? store.cancel(item.id, stage: stage)
+                _ = try? store.cancel(item.id, stage: store.organizingResumeStage(for: item.id))
             case .recording, .organized, .failed, .cancelled:
                 break
             }

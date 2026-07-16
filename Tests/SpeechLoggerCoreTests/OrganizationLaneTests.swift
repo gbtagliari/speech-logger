@@ -341,21 +341,6 @@ private func blockUntilCancelled() async {
     while !Task.isCancelled { await Task.yield() }
 }
 
-/// Poll `condition` until it holds or the timeout elapses (then throw). Waits for the
-/// lane to reach a state before acting on it, without a fixed sleep.
-private func waitUntil(
-    timeout: Double = 5,
-    _ condition: @escaping @Sendable () async -> Bool
-) async throws {
-    let deadline = ContinuousClock.now + .seconds(timeout)
-    while ContinuousClock.now < deadline {
-        if await condition() { return }
-        try await Task.sleep(for: .milliseconds(5))
-    }
-    struct WaitTimeout: Error {}
-    throw WaitTimeout()
-}
-
 /// A one-shot barrier: `arriveAndWait` blocks each caller until `expected` callers
 /// have arrived, then releases them all. Used to prove the lane runs items in
 /// parallel — a serial lane can never gather `expected` simultaneous arrivals.

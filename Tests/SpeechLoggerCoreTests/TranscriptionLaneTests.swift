@@ -251,21 +251,6 @@ private struct BlockingTranscriber: Transcribing {
     }
 }
 
-/// Poll `condition` until it holds or the timeout elapses (then throw). Used to wait
-/// for the lane to actually reach a state before acting on it, without a fixed sleep.
-private func waitUntil(
-    timeout: Double = 5,
-    _ condition: @escaping @Sendable () async -> Bool
-) async throws {
-    let deadline = ContinuousClock.now + .seconds(timeout)
-    while ContinuousClock.now < deadline {
-        if await condition() { return }
-        try await Task.sleep(for: .milliseconds(5))
-    }
-    struct WaitTimeout: Error {}
-    throw WaitTimeout()
-}
-
 /// A thread-safe sink for the lane's callbacks (they fire synchronously on the actor).
 private final class Collector: @unchecked Sendable {
     private let lock = NSLock()

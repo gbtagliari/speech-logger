@@ -70,10 +70,20 @@ public struct ItemStore: Sendable {
         return try wrap { try Data(contentsOf: url) }
     }
 
-    /// Whether a content file exists — a cheap presence check used to pinpoint the
-    /// resume stage of an `organizing` item (`pass1.txt` present ⇒ resume at pass 2).
+    /// Whether a content file exists — a cheap presence check for callers that reason
+    /// about which artifacts survived.
     public func hasContent(_ file: String, for id: String) -> Bool {
         FileManager.default.fileExists(atPath: fileURL(id, file).path)
+    }
+
+    /// Which pass an `organizing` item should resume from, read off the surviving
+    /// artifacts (#22): a retained `pass1.txt` means pass 1 finished and pass 2 was
+    /// interrupted (resume at `pass2`, reusing the pivot); its absence means pass 1
+    /// itself was interrupted (resume at `pass1`, reusing the transcript). The single
+    /// home for this rule — boot recovery and the graceful-quit sweep both use it, so
+    /// the item-directory layout stays the store's knowledge alone.
+    public func organizingResumeStage(for id: String) -> Stage {
+        hasContent(ItemFile.pass1, for: id) ? .pass2 : .pass1
     }
 
     // MARK: - Transitions
@@ -226,15 +236,13 @@ public struct ItemStore: Sendable {
     }
 
     /// Which stage a non-terminal state died in, for a recovered orphan. An
-    /// `organizing` death is pinpointed from the surviving artifacts so retry
-    /// resumes from the right pass (#22): `pass1.txt` on disk means pass 1 finished
-    /// and pass 2 was interrupted (resume at `pass2`, reusing the pivot); its absence
-    /// means pass 1 itself was interrupted (resume at `pass1`, reusing the transcript).
+    /// `organizing` death is pinpointed from the surviving artifacts (`organizingResumeStage`)
+    /// so retry resumes from the right pass (#22).
     private func recoveryStage(for state: ItemState, id: String) -> Stage {
         switch state {
         case .recording: return .recording
         case .queued, .transcribing: return .transcription
-        case .organizing: return hasContent(ItemFile.pass1, for: id) ? .pass2 : .pass1
+        case .organizing: return organizingResumeStage(for: id)
         case .organized, .failed, .cancelled:
             return .recording // unreachable: callers filter terminal states first
         }

@@ -56,11 +56,12 @@ func runSubprocess(
     environment: [String: String],
     stdin: Data? = nil,
     discardStdout: Bool = false
-) async throws -> SubprocessResult {
+) async throws(SubprocessLaunchError) -> SubprocessResult {
     let handle = ProcessHandle()
-    return try await withTaskCancellationHandler {
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<SubprocessResult, Error>) in
+    do {
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<SubprocessResult, Error>) in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
@@ -100,7 +101,14 @@ func runSubprocess(
                 try? writer.close()
             }
         }
-    } onCancel: {
-        handle.terminate()
+        } onCancel: {
+            handle.terminate()
+        }
+    } catch let error as SubprocessLaunchError {
+        throw error
+    } catch {
+        // Unreachable: the continuation only ever throws `SubprocessLaunchError`.
+        // Present so the untyped continuation collapses back to the typed throw.
+        throw SubprocessLaunchError(message: "\(error)")
     }
 }
