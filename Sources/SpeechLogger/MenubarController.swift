@@ -1,27 +1,38 @@
 import AppKit
 import SpeechLoggerCore
+import SwiftUI
 
-/// Owns the status item and renders the priority-ladder glyph plus, while
-/// recording, a running clock (SPEC "UI", stories 5 and 6). One glyph, one state
-/// (`MenubarState`). The full three-section panel (Prontos / Precisam de você) is
-/// a later ticket; this build shows the recording clock and the degraded
-/// Input-Monitoring path.
+/// Owns the status item: renders the priority-ladder glyph plus, while recording, a
+/// running clock (SPEC "UI", stories 5, 6), and hangs the three-section panel off
+/// the button as an `NSPopover` hosting a SwiftUI `PanelView`. The glyph is one
+/// state (`MenubarState`); the panel is a `PanelModel`. `AppDelegate` pushes both on
+/// every app state change and wires the row actions through `viewModel`.
 @MainActor final class MenubarController {
     private let statusItem: NSStatusItem
+    private let popover = NSPopover()
+    /// The observable state behind the panel. `AppDelegate` sets its action closures.
+    let viewModel = PanelViewModel()
+
     private var state: MenubarState = .idle
     private var clockTimer: Timer?
     private var recordingSeconds = 0
 
-    /// Deep-link to the Input Monitoring pane (shown in the degraded state).
-    var onOpenInputMonitoringSettings: (() -> Void)?
-    var onQuit: (() -> Void)?
+    /// Called just before the panel opens, so the app can refresh the item list and
+    /// re-check permission (SPEC: preflight re-checks on panel-open).
+    var onPanelWillOpen: (() -> Void)?
 
     init() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: PanelView(viewModel: viewModel))
+        if let button = statusItem.button {
+            button.action = #selector(togglePopover)
+            button.target = self
+        }
         render()
     }
 
-    /// Reflect a new app state. Starts/stops the running clock on entering/leaving
+    /// Reflect a new glyph state. Starts/stops the running clock on entering/leaving
     /// `recording`.
     func update(_ state: MenubarState) {
         let wasRecording = self.state == .recording
@@ -34,7 +45,14 @@ import SpeechLoggerCore
         render()
     }
 
-    // MARK: - Rendering
+    /// Push a fresh panel model into the view (SPEC "UI"). `needsPermission` drives
+    /// the degraded banner shown inside the panel.
+    func updatePanel(_ model: PanelModel, needsPermission: Bool) {
+        viewModel.model = model
+        viewModel.needsPermission = needsPermission
+    }
+
+    // MARK: - Glyph rendering
 
     private func render() {
         guard let button = statusItem.button else { return }
@@ -42,7 +60,6 @@ import SpeechLoggerCore
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: accessibility)
         button.image?.isTemplate = true
         button.title = state == .recording ? " \(Self.clockText(recordingSeconds))" : ""
-        statusItem.menu = makeMenu()
     }
 
     private var accessibility: String {
@@ -74,10 +91,12 @@ import SpeechLoggerCore
 
     private func startClock() {
         recordingSeconds = 0
+        viewModel.recordingSeconds = 0
         clockTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.recordingSeconds += 1
+                self.viewModel.recordingSeconds = self.recordingSeconds
                 self.render()
             }
         }
@@ -87,49 +106,18 @@ import SpeechLoggerCore
         clockTimer?.invalidate()
         clockTimer = nil
         recordingSeconds = 0
+        viewModel.recordingSeconds = 0
     }
 
-    // MARK: - Menu
+    // MARK: - Popover
 
-    private func makeMenu() -> NSMenu {
-        let menu = NSMenu()
-
-        let heading = NSMenuItem(title: "speech logger", action: nil, keyEquivalent: "")
-        heading.isEnabled = false
-        menu.addItem(heading)
-
-        switch state {
-        case .recording:
-            let status = NSMenuItem(
-                title: "Gravando  \(Self.clockText(recordingSeconds))", action: nil, keyEquivalent: "")
-            status.isEnabled = false
-            menu.addItem(status)
-        case .needsPermission:
-            let note = NSMenuItem(
-                title: "Monitoramento de Entrada desativado", action: nil, keyEquivalent: "")
-            note.isEnabled = false
-            menu.addItem(note)
-            let open = NSMenuItem(
-                title: "Abrir Ajustes do Sistema…", action: #selector(openSettings), keyEquivalent: "")
-            open.target = self
-            menu.addItem(open)
-            let hint = NSMenuItem(
-                title: "Depois de permitir, reabra o app.", action: nil, keyEquivalent: "")
-            hint.isEnabled = false
-            menu.addItem(hint)
-        case .failed, .processing, .idle:
-            break
+    @objc private func togglePopover() {
+        if popover.isShown {
+            popover.performClose(nil)
+        } else if let button = statusItem.button {
+            onPanelWillOpen?()
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.makeKey()
         }
-
-        menu.addItem(.separator())
-
-        let quit = NSMenuItem(title: "Sair", action: #selector(quit), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
-
-        return menu
     }
-
-    @objc private func openSettings() { onOpenInputMonitoringSettings?() }
-    @objc private func quit() { onQuit?() }
 }

@@ -38,8 +38,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menubar = MenubarController()
-        menubar.onOpenInputMonitoringSettings = { InputMonitoring.openSettings() }
-        menubar.onQuit = { NSApp.terminate(nil) }
+        menubar.onPanelWillOpen = { [weak self] in self?.refresh() }
+        menubar.viewModel.onOpenSettings = { InputMonitoring.openSettings() }
+        menubar.viewModel.onQuit = { NSApp.terminate(nil) }
+        menubar.viewModel.onCopy = { [weak self] id in self?.copyFinalText(of: id) }
+        menubar.viewModel.onDelete = { [weak self] id in self?.deleteItem(id) }
+        menubar.viewModel.onRetry = { [weak self] id in
+            // Retry orchestration (resume from the failed/stopped stage, reusing
+            // artifacts) is owned by #22; the button is present per the panel spec
+            // but does not yet re-run the pipeline (SPEC "Retry", story 29).
+            self?.log.info("retry requested for \(id, privacy: .public) — not yet wired")
+        }
         self.menubar = menubar
 
         // The unbounded parallel organization lane (ADR-0001, ADR-0006): drip-fed by
@@ -56,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let lane = TranscriptionLane(
             store: store,
             transcriber: Transcriber(),
-            onStateChange: { [weak self] in Task { @MainActor in self?.refreshIcon() } },
+            onStateChange: { [weak self] in Task { @MainActor in self?.refresh() } },
             onTranscribed: { [weak organizationLane] id in
                 Task { await organizationLane?.organize(id) }
             })
@@ -64,7 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let coordinator = RecordingCoordinator(
             store: store, recorder: AudioRecorder(), encoder: AudioEncoder())
-        coordinator.onStateChange = { [weak self] in self?.refreshIcon() }
+        coordinator.onStateChange = { [weak self] in self?.refresh() }
         coordinator.onQueued = { [weak lane] id in Task { await lane?.enqueue(id) } }
         coordinator.onRecorderStartFailed = { [weak self] error in
             self?.log.error("recording could not start: \(String(describing: error))")
@@ -75,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.hotkeyMonitor = hotkeyMonitor
 
         installHotkey()
-        refreshIcon()
+        refresh()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -88,7 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidBecomeActive(_ notification: Notification) {
         guard needsPermission else { return }
         installHotkey()
-        refreshIcon()
+        refresh()
     }
 
     // MARK: - Wiring
@@ -103,13 +112,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func refreshIcon() {
+    /// Recompute both the glyph and the panel from the current item list and push
+    /// them to the menubar. The single refresh path, fired after every state change.
+    private func refresh() {
         let items = (try? store?.list()) ?? []
         let state = MenubarState.resolve(
             items: items,
             isRecording: coordinator?.isRecording ?? false,
             needsPermission: needsPermission)
         menubar?.update(state)
+
+        let model = PanelModel.build(
+            items: items,
+            now: Date(),
+            finalText: { [weak self] id in
+                guard let self, let store = self.store else { return nil }
+                do {
+                    return try store.finalText(for: id)
+                } catch {
+                    self.log.error(
+                        "preview text unavailable for \(id, privacy: .public): \(String(describing: error))")
+                    return nil
+                }
+            })
+        menubar?.updatePanel(model, needsPermission: needsPermission)
+    }
+
+    /// Copy an organized item's final pass-2 text to the clipboard (story 22). Only
+    /// `organized` items return text, so nothing partial is ever copyable as final.
+    private func copyFinalText(of id: String) {
+        guard let text = try? store?.finalText(for: id) else {
+            log.error("copy requested for \(id, privacy: .public) with no final text")
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    /// Send an item to the macOS Trash (stories 25, 26), then refresh the panel.
+    private func deleteItem(_ id: String) {
+        do {
+            try store?.delete(id)
+        } catch {
+            log.error("delete failed for \(id, privacy: .public): \(String(describing: error))")
+        }
+        refresh()
     }
 
     /// Build the organization lane, loading the two bundled prompts. If they cannot
@@ -129,7 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return OrganizationLane(
             store: store,
             organizer: ClaudeOrganizer(prompts: prompts),
-            onStateChange: { [weak self] in Task { @MainActor in self?.refreshIcon() } },
+            onStateChange: { [weak self] in Task { @MainActor in self?.refresh() } },
             onOrganized: { [weak self] id in
                 Task { @MainActor in self?.log.info("organized \(id, privacy: .public)") }
             })
