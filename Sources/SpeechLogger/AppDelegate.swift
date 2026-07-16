@@ -112,11 +112,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menubar?.update(state)
     }
 
-    /// Build the organization lane, loading the bundled prompts. On a load failure the
-    /// organizer still runs but every pass fails `missing_binary`-style — so instead we
-    /// log and wire it with the prompts we have; a missing prompt is a build error that
-    /// preflight (a later ticket) will surface. The lane advances `organizing` ->
-    /// `organized` and, later, will raise the ready notification via `onOrganized`.
+    /// Build the organization lane, loading the two bundled prompts. If they cannot
+    /// load — a build/packaging error, never expected at runtime — organization is
+    /// disabled (nil): transcribed items rest at `transcribing` rather than every one
+    /// failing on a missing prompt, and preflight (a later ticket) surfaces the cause.
+    /// When wired, the lane advances `organizing` -> `organized` and, later, will
+    /// raise the ready notification via `onOrganized`.
     private func makeOrganizationLane(store: ItemStore) -> OrganizationLane? {
         let prompts: Prompts
         do {

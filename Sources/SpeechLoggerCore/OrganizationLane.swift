@@ -47,9 +47,12 @@ public actor OrganizationLane {
 
     /// Await every in-flight item settling. Used by tests and, later, graceful quit.
     public func waitUntilIdle() async {
-        // Snapshot: a task clears its own entry on completion, so awaiting the
-        // snapshot's values drains the current backlog without racing the mutation.
-        for task in tasks.values { await task.value }
+        // Copy the tasks into an array first: awaiting each one suspends the actor,
+        // during which a finishing task clears its own `tasks[id]` entry. Iterating
+        // the live dictionary view across that mutation is undefined; the array is an
+        // independent snapshot of the current backlog, immune to it.
+        let running = Array(tasks.values)
+        for task in running { await task.value }
     }
 
     private func process(_ id: String) async {
