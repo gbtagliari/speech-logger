@@ -230,6 +230,15 @@ final class ItemStoreTests {
         }
     }
 
+    @Test("directoryURL points at the item directory and requires the item to exist")
+    func directoryURLResolves() throws {
+        let item = try store.create()
+        #expect(try store.directoryURL(for: item.id) == root.appendingPathComponent(item.id))
+        #expect(throws: StoreError.itemNotFound("nope")) {
+            _ = try store.directoryURL(for: "nope")
+        }
+    }
+
     // MARK: - Boot recovery
 
     @Test("boot recovery marks every non-terminal item failed/interrupted")

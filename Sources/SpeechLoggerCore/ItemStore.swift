@@ -194,6 +194,14 @@ public struct ItemStore: Sendable {
 
     // MARK: - Content-file location
 
+    /// The on-disk URL of an existing item's own directory, for callers that reveal
+    /// it to the user (the panel's "abrir pasta"). Throws rather than returning a
+    /// speculative URL, so a caller never opens a path that is not there.
+    public func directoryURL(for id: String) throws(StoreError) -> URL {
+        guard directoryExists(id) else { throw StoreError.itemNotFound(id) }
+        return directory(for: id)
+    }
+
     /// The on-disk URL of a content file inside an existing item's directory, for
     /// callers that must write a large artifact in place (streamed) rather than
     /// through `write(_:to:for:)`, which buffers the whole blob in memory. The

@@ -23,6 +23,9 @@ final class PanelViewModel: ObservableObject {
     var onRetry: (String) -> Void = { _ in }
     /// Stop an in-flight processing item — queued/transcribing/organizing (story 30).
     var onStop: (String) -> Void = { _ in }
+    /// Reveal an item's directory in Finder, so its artifacts (audio, transcript,
+    /// the two passes) are reachable when the panel's preview is not enough.
+    var onOpenFolder: (String) -> Void = { _ in }
     /// Deep-link to the Input Monitoring pane (degraded state).
     var onOpenSettings: () -> Void = {}
     var onQuit: () -> Void = {}

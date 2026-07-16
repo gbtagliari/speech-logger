@@ -71,7 +71,8 @@ struct PanelView: View {
                     row: row,
                     justCopied: copiedID == row.id,
                     onCopy: { copy(row.id) },
-                    onDelete: { viewModel.onDelete(row.id) })
+                    onDelete: { viewModel.onDelete(row.id) },
+                    onOpenFolder: { viewModel.onOpenFolder(row.id) })
             }
         }
     }
@@ -83,7 +84,8 @@ struct PanelView: View {
                 NeedsRowView(
                     row: row,
                     onRetry: { viewModel.onRetry(row.id) },
-                    onDelete: { viewModel.onDelete(row.id) })
+                    onDelete: { viewModel.onDelete(row.id) },
+                    onOpenFolder: { viewModel.onOpenFolder(row.id) })
             }
         }
     }
@@ -233,6 +235,7 @@ private struct ReadyRowView: View {
     let justCopied: Bool
     let onCopy: () -> Void
     let onDelete: () -> Void
+    let onOpenFolder: () -> Void
     @State private var hovering = false
 
     var body: some View {
@@ -256,7 +259,10 @@ private struct ReadyRowView: View {
         if justCopied {
             Text("copiado").font(.system(size: 11, weight: .semibold)).foregroundStyle(.green)
         } else if hovering {
-            IconButton(systemName: "xmark", help: "apagar", action: onDelete)
+            HStack(spacing: 4) {
+                RowMenu(onOpenFolder: onOpenFolder)
+                IconButton(systemName: "xmark", help: "apagar", action: onDelete)
+            }
         } else {
             Text(row.timeText).font(.system(size: 11).monospacedDigit()).foregroundStyle(.tertiary)
         }
@@ -269,6 +275,7 @@ private struct NeedsRowView: View {
     let row: PanelModel.NeedsRow
     let onRetry: () -> Void
     let onDelete: () -> Void
+    let onOpenFolder: () -> Void
     @State private var hovering = false
 
     var body: some View {
@@ -291,6 +298,7 @@ private struct NeedsRowView: View {
                 if row.isRetryable {
                     IconButton(systemName: "arrow.clockwise", help: retryHelp, action: onRetry)
                 }
+                RowMenu(onOpenFolder: onOpenFolder)
                 IconButton(systemName: "xmark", help: "apagar", action: onDelete)
             }
         } else {
@@ -319,6 +327,27 @@ private struct PulsingDot: View {
             .opacity(dim ? 0.35 : 1)
             .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: dim)
             .onAppear { dim = true }
+    }
+}
+
+/// The hover-revealed "..." overflow menu on a row backed by an item directory
+/// (ready / needs-you). It holds the actions that are useful but not worth a
+/// permanent icon; the frequent ones (copy, retry, delete) stay where they are.
+private struct RowMenu: View {
+    let onOpenFolder: () -> Void
+
+    var body: some View {
+        Menu {
+            Button("Abrir pasta", action: onOpenFolder)
+        } label: {
+            Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
+                .frame(width: 22, height: 22)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 22, height: 22)
+        .foregroundStyle(.secondary)
+        .help("mais opções")
     }
 }
 

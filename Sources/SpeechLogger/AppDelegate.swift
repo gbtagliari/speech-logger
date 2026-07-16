@@ -49,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menubar.viewModel.onDelete = { [weak self] id in self?.deleteItem(id) }
         menubar.viewModel.onRetry = { [weak self] id in self?.pipelineController?.retry(id) }
         menubar.viewModel.onStop = { [weak self] id in self?.pipelineController?.stop(id) }
+        menubar.viewModel.onOpenFolder = { [weak self] id in self?.openFolder(of: id) }
         self.menubar = menubar
 
         // The unbounded parallel organization lane (ADR-0001, ADR-0006): drip-fed by
@@ -183,6 +184,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             log.error("delete failed for \(id, privacy: .public): \(String(describing: error))")
         }
         refresh()
+    }
+
+    /// Open an item's directory in Finder, so its artifacts are reachable when the
+    /// panel's preview is not enough — a failed organization still has `transcript.txt`
+    /// and `pass1.txt` on disk. Read-only: the store is never touched.
+    private func openFolder(of id: String) {
+        guard let url = try? store?.directoryURL(for: id) else {
+            log.error("open folder requested for \(id, privacy: .public) with no directory")
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     /// Build the organization lane, loading the two bundled prompts. If they cannot
