@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var store: ItemStore?
     private var coordinator: RecordingCoordinator?
+    private var transcriptionLane: TranscriptionLane?
     private var hotkeyMonitor: HotkeyMonitor?
     private var menubar: MenubarController?
     /// True when Input Monitoring is not granted; drives the degraded glyph.
@@ -40,9 +41,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menubar.onQuit = { NSApp.terminate(nil) }
         self.menubar = menubar
 
+        // The single serial transcription lane (ADR-0006): items land `queued`, this
+        // picks them up one at a time and writes the raw transcript. The transcript
+        // handoff to organization is a later ticket; for now the item rests
+        // `transcribing` once its text exists.
+        let lane = TranscriptionLane(
+            store: store,
+            transcriber: Transcriber(),
+            onStateChange: { [weak self] in Task { @MainActor in self?.refreshIcon() } },
+            onTranscribed: { [weak self] id in
+                Task { @MainActor in self?.log.info("transcribed \(id, privacy: .public)") }
+            })
+        self.transcriptionLane = lane
+
         let coordinator = RecordingCoordinator(
             store: store, recorder: AudioRecorder(), encoder: AudioEncoder())
         coordinator.onStateChange = { [weak self] in self?.refreshIcon() }
+        coordinator.onQueued = { [weak lane] id in Task { await lane?.enqueue(id) } }
         coordinator.onRecorderStartFailed = { [weak self] error in
             self?.log.error("recording could not start: \(String(describing: error))")
         }

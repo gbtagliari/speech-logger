@@ -136,6 +136,41 @@ private final class Clock: @unchecked Sendable {
         #expect(!FileManager.default.fileExists(atPath: recorder.lastWav!.path))
     }
 
+    @Test("landing queued hands the item id to the transcription lane exactly once")
+    func acceptFiresOnQueued() async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        var queued: [String] = []
+        coordinator.onQueued = { queued.append($0) }
+        recorder.captureDuration = 8.0
+        recorder.capturePeak = 0.4
+        coordinator.start()
+        await coordinator.stop()
+
+        let items = try store.list()
+        #expect(queued == [items[0].id])
+    }
+
+    @Test("a discarded or failed recording never hands off to the lane")
+    func nonAcceptDoesNotFireOnQueued() async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        var queued: [String] = []
+        coordinator.onQueued = { queued.append($0) }
+        // Too short: discarded, no handoff.
+        recorder.captureDuration = 0.1
+        recorder.capturePeak = 0.4
+        coordinator.start()
+        await coordinator.stop()
+        // Long but silent: failed, no handoff.
+        recorder.captureDuration = 8.0
+        recorder.capturePeak = 0.0
+        coordinator.start()
+        await coordinator.stop()
+
+        #expect(queued.isEmpty)
+    }
+
     // MARK: - The hotkey never refuses
 
     @Test("a new recording starts even while the previous item is still queued")

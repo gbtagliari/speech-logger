@@ -53,6 +53,9 @@ public protocol AudioEncoding: Sendable {
 
     /// Called after any state-affecting step, so the menubar can recompute its glyph.
     public var onStateChange: (@MainActor () -> Void)?
+    /// Called with the item id the instant it lands `queued`, so the transcription
+    /// lane can pick it up (ADR-0006). The hero handoff from recording to the pipeline.
+    public var onQueued: (@MainActor (String) -> Void)?
     /// Called when the mic fails to start (e.g. access denied), so the app can
     /// surface it. The item is discarded; the app stays idle.
     public var onRecorderStartFailed: (@MainActor (Error) -> Void)?
@@ -130,6 +133,7 @@ public protocol AudioEncoding: Sendable {
                 let mp3 = try store.contentURL(of: ItemFile.audio, for: id)
                 try await encoder.encode(wav: capture.wav, to: mp3)
                 _ = try store.markQueued(id, duration: capture.duration)
+                onQueued?(id)  // hand the item to the serial transcription lane
             } catch {
                 _ = try? store.fail(
                     id, stage: .recording, reason: .cliError, detail: "encode failed: \(error)")
