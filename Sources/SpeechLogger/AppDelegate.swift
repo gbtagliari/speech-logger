@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var store: ItemStore?
     private var coordinator: RecordingCoordinator?
     private var transcriptionLane: TranscriptionLane?
+    private var organizationLane: OrganizationLane?
     private var hotkeyMonitor: HotkeyMonitor?
     private var menubar: MenubarController?
     /// True when Input Monitoring is not granted; drives the degraded glyph.
@@ -41,16 +42,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menubar.onQuit = { NSApp.terminate(nil) }
         self.menubar = menubar
 
+        // The unbounded parallel organization lane (ADR-0001, ADR-0006): drip-fed by
+        // the transcription lane, it runs the two `claude` passes (`organizing` ->
+        // `organized`). The prompts ship as bundled resources; if they cannot load
+        // (a packaging error), organization is left unwired and transcribed items
+        // rest at `transcribing` rather than failing every one on a missing prompt.
+        let organizationLane = makeOrganizationLane(store: store)
+        self.organizationLane = organizationLane
+
         // The single serial transcription lane (ADR-0006): items land `queued`, this
-        // picks them up one at a time and writes the raw transcript. The transcript
-        // handoff to organization is a later ticket; for now the item rests
-        // `transcribing` once its text exists.
+        // picks them up one at a time and writes the raw transcript, then hands the
+        // item to the organization lane the instant its text exists.
         let lane = TranscriptionLane(
             store: store,
             transcriber: Transcriber(),
             onStateChange: { [weak self] in Task { @MainActor in self?.refreshIcon() } },
-            onTranscribed: { [weak self] id in
-                Task { @MainActor in self?.log.info("transcribed \(id, privacy: .public)") }
+            onTranscribed: { [weak organizationLane] id in
+                Task { await organizationLane?.organize(id) }
             })
         self.transcriptionLane = lane
 
@@ -102,6 +110,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isRecording: coordinator?.isRecording ?? false,
             needsPermission: needsPermission)
         menubar?.update(state)
+    }
+
+    /// Build the organization lane, loading the bundled prompts. On a load failure the
+    /// organizer still runs but every pass fails `missing_binary`-style — so instead we
+    /// log and wire it with the prompts we have; a missing prompt is a build error that
+    /// preflight (a later ticket) will surface. The lane advances `organizing` ->
+    /// `organized` and, later, will raise the ready notification via `onOrganized`.
+    private func makeOrganizationLane(store: ItemStore) -> OrganizationLane? {
+        let prompts: Prompts
+        do {
+            prompts = try Prompts.bundled()
+        } catch {
+            log.error("organization disabled; prompts failed to load: \(String(describing: error))")
+            return nil
+        }
+        return OrganizationLane(
+            store: store,
+            organizer: ClaudeOrganizer(prompts: prompts),
+            onStateChange: { [weak self] in Task { @MainActor in self?.refreshIcon() } },
+            onOrganized: { [weak self] id in
+                Task { @MainActor in self?.log.info("organized \(id, privacy: .public)") }
+            })
     }
 
     private func makeStore() -> ItemStore {

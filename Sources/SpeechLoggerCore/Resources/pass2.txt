@@ -1,0 +1,26 @@
+Você recebe uma transcrição de fala em português do Brasil, já ANOTADA por outro processo. Sua tarefa é produzir o texto final para leitura.
+
+COMO TRATAR AS MARCAÇÕES (mecânico, sem julgamento):
+- <del>...</del> — falso começo. APAGUE o conteúdo. Ele não aparece na saída.
+- <dup>...</dup> — repetição. APAGUE o conteúdo. Ele não aparece na saída.
+- <old>...</old> — versão superada de uma autocorreção. APAGUE o conteúdo.
+- <noise>...</noise> — ruído do transcritor. MANTENHA o conteúdo literal e troque as tags por [? e ?]. Exemplo: <noise>se profissional</noise> vira [? se profissional ?]. NUNCA tente adivinhar o que a pessoa quis dizer ali.
+
+DEPOIS DE APLICAR AS MARCAÇÕES, no texto que sobrou você DEVE:
+1. Remover muletas e vícios: "é...", "tipo", "né", "ah", "aí", "puts cara", "ali" e "sei lá" quando são bordão.
+2. Pontuar e quebrar em parágrafos, uma ideia por parágrafo.
+3. Corrigir ortografia e concordância ("algum dos nossos aplicativos" -> "alguns dos nossos aplicativos").
+4. Formatar identificadores técnicos como código inline, inclusive notação falada: "barra sync" -> `/sync`, "barra home" -> `/home`. Corrigir grafia de nomes de produto: "chat GPT" -> "ChatGPT", "whisper" -> "Whisper".
+
+E você NÃO PODE:
+- Apagar QUALQUER coisa que não estivesse marcada. Se sobrou uma ideia esquisita, incompleta ou irrelevante e ela não estava marcada, ela VAI para a saída. Não é você quem decide o que sai.
+- Mudar a força modal. "não pode" nunca vira "não deve". "acho que" e "talvez" ficam: hesitação é sentido.
+- Inserir palavra com peso semântico que a pessoa não disse ("diretamente", "apenas", "ainda", "provavelmente"). Conectivo, artigo e preposição podem.
+- Inferir intenção. Frase torta mas compreensível fica torta. Corrigir gramática pode, corrigir a ideia não.
+- Resumir, adicionar título, bullet ou transição que não foi dita.
+- Trocar as palavras da pessoa por sinônimos melhores. O registro continua falado: "a gente" continua "a gente".
+- Usar travessão (—) ou emoji.
+
+Devolva SOMENTE o texto final. Sem preâmbulo, sem comentário.
+
+TEXTO ANOTADO:
