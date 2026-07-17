@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" fill="none" style="color:#171922" role="img" aria-label="falha">
+  <rect x="34" y="16" width="28" height="50" rx="14" stroke="currentColor" stroke-width="4.5"/>
+  <!-- exclamation inside the capsule -->
+  <line x1="48" y1="28" x2="48" y2="45" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="48" cy="54" r="2.6" fill="currentColor"/>
+  <path d="M26 46a22 22 0 0 0 44 0" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="48" y1="68" x2="48" y2="80" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="39" y1="80" x2="57" y2="80" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/>
+</svg>
