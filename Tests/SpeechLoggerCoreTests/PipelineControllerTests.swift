@@ -91,6 +91,87 @@ import Testing
         #expect(try ctx.store.meta(for: id).state == .queued)
     }
 
+    // MARK: - Reprocess (#24)
+
+    @Test("reprocess re-runs an organized item from the audio and replaces its final text")
+    func reprocessOrganizedItem() async throws {
+        // #24: the item reached `organized` with a chat reply instead of the dictation,
+        // and no error. Retry has no stage to offer; only a full re-run recovers it.
+        let ctx = try Context()
+        let id = try ctx.queuedItem(withAudio: true)
+        _ = try ctx.store.markTranscribing(id)
+        try ctx.store.write(Data("transcrição velha".utf8), to: ItemFile.transcript, for: id)
+        try ctx.store.write(Data("pivô velho".utf8), to: ItemFile.pass1, for: id)
+        _ = try ctx.store.markOrganizing(id)
+        _ = try ctx.store.markOrganized(id, finalText: "Entendi o relato. Qual repositório devo olhar?")
+
+        ctx.controller.reprocess(id)
+        try await waitUntil { (try? ctx.store.finalText(for: id)) == rerunFinalText }
+
+        // Both passes ran again over a freshly transcribed text: nothing of the bad run
+        // was reused, and the final text is the new one.
+        #expect(await ctx.organizer.annotateCalls == 1)
+        #expect(try ctx.store.finalText(for: id) == rerunFinalText)
+    }
+
+    @Test("reprocess re-transcribes rather than resuming, even for an item that died late")
+    func reprocessIgnoresTheResumeStage() async throws {
+        // The distinction from retry: this item died at pass 2 with a pivot on disk, so
+        // retry would rewrite that pivot. Reprocess throws it away and starts over.
+        let ctx = try Context()
+        let id = try ctx.queuedItem(withAudio: true)
+        _ = try ctx.store.markTranscribing(id)
+        try ctx.store.write(Data("transcrição velha".utf8), to: ItemFile.transcript, for: id)
+        try ctx.store.write(Data("PIVÔ VELHO".utf8), to: ItemFile.pass1, for: id)
+        _ = try ctx.store.markOrganizing(id)
+        _ = try ctx.store.cancel(id, stage: .pass2)
+
+        ctx.controller.reprocess(id)
+        try await waitUntil { (try? ctx.store.meta(for: id))?.state == .organized }
+
+        #expect(await ctx.organizer.annotateCalls == 1)  // pass 1 ran; the old pivot was not reused
+        #expect(try ctx.store.finalText(for: id) == rerunFinalText)
+    }
+
+    @Test("reprocess refuses when organization is disabled rather than destroying what it cannot rebuild")
+    func reprocessRefusesWithoutOrganization() async throws {
+        // Prompts failed to load, so the app wires no organization lane. Reprocess is the
+        // one control that discards before it rebuilds: without that lane the item would
+        // lose its good text and park at `transcribing` forever.
+        let ctx = try Context(withOrganization: false)
+        let id = try ctx.queuedItem(withAudio: true)
+        _ = try ctx.store.markTranscribing(id)
+        _ = try ctx.store.markOrganizing(id)
+        _ = try ctx.store.markOrganized(id, finalText: "texto bom")
+
+        ctx.controller.reprocess(id)
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(try ctx.store.meta(for: id).state == .organized)
+        #expect(try ctx.store.finalText(for: id) == "texto bom")  // never destroyed
+    }
+
+    @Test("reprocess of a recording-stage death is a no-op: there is no audio to run again")
+    func reprocessRecordingStageIsNoOp() async throws {
+        let ctx = try Context()
+        let item = try ctx.store.create()
+        _ = try ctx.store.fail(item.id, stage: .recording, reason: .noSpeech, detail: "silent")
+
+        ctx.controller.reprocess(item.id)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(try ctx.store.meta(for: item.id).state == .failed)
+    }
+
+    @Test("reprocess of an in-flight item is a no-op: it is already running")
+    func reprocessInFlightIsNoOp() async throws {
+        let ctx = try Context()
+        let id = try ctx.queuedItem()  // still queued; reprocessing it would double-enqueue
+
+        ctx.controller.reprocess(id)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(try ctx.store.meta(for: id).state == .queued)
+    }
+
     // MARK: - Graceful quit
 
     @Test("quit marks in-flight processing cancelled, discards the recording, and does not block")
@@ -138,7 +219,9 @@ import Testing
         let organizer = RecordingOrganizer()
         let controller: PipelineController
 
-        init() throws {
+        /// - Parameter withOrganization: false wires the controller with no organization
+        ///   lane, standing in for the packaging error where the prompts fail to load.
+        init(withOrganization: Bool = true) throws {
             root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("pipeline-tests-\(UUID().uuidString)", isDirectory: true)
                 .appendingPathComponent("items", isDirectory: true)
@@ -158,7 +241,8 @@ import Testing
                 store: store, recorder: StubRecorder(), encoder: StubEncoder())
             controller = PipelineController(
                 store: store, recording: recording,
-                transcription: transcription, organization: organization)
+                transcription: transcription,
+                organization: withOrganization ? organization : nil)
         }
 
         deinit { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
@@ -225,6 +309,11 @@ private actor RecordingOrganizer: Organizing {
 private enum FakeOrganizer {
     static func rewritten(_ t: String) -> String { "REWRITTEN[\(t)]" }
 }
+
+/// The final text a re-run produces: the fake transcriber's output through both fake
+/// passes. Distinct from anything a test stages as the *old*, discarded run's output,
+/// so "the text was replaced" is asserted on identity, not just on change.
+private let rerunFinalText = FakeOrganizer.rewritten("ANNOTATED[raw transcript]")
 
 /// Writes a real temp wav on `start`, returns a normal capture on `stop`.
 @MainActor private final class StubRecorder: AudioRecording {

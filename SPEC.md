@@ -140,6 +140,8 @@ that capability gap is what decided build over buy.
     a click, so that first run is not a manual shell chore.
 40. As a user, I want a preflight failure to never block the hotkey: the recording still happens and
     lands as a retryable `failed` item, so that I never lose a thought to a missing dependency.
+41. As a user, I want to reprocess an item — re-run transcription and both passes from the audio —
+    so that an item that finished with the wrong text costs me a click, not a re-recording (#24).
 
 ## Implementation Decisions
 
@@ -197,6 +199,12 @@ that capability gap is what decided build over buy.
   ever copyable as final.
 - **Retry is manual, resuming from the failed/stopped stage**, reusing retained artifacts. No
   auto-retry. A `recording`-stage death has nothing to resume (delete only).
+- **Reprocess is manual and starts over from `audio.mp3`** (story 41, #24): the item goes back to
+  `queued` and `transcript.txt`, `pass1.txt` and `final.txt` are discarded, so nothing of the bad run
+  is reused. Offered on any item that got past the recording stage, `organized` included — that is
+  the point, since a pass can return fluent text that is not the dictation and the pipeline has no
+  way to notice (fidelity is not judged at runtime). Distinct from retry, which resumes and reuses.
+  It is the only control that asks for confirmation: the discarded text does not come back.
 - **Delete → macOS Trash** (`FileManager.trashItem`). **Retention is manual only** — no automatic
   expiry, no cap.
 - **Boot recovery**: any non-terminal item with no live process → `failed`/`interrupted` (retryable,
@@ -246,6 +254,10 @@ that capability gap is what decided build over buy.
   - *Prontos* — green dot + a preview **clamped to ~3 lines / a char cap** (not one line, not the full
     text) + click-to-copy the pass-2 text.
   - *Precisam de você* — `failed` (amber + reason + retry) and `cancelled` (grey + retry).
+  - Both settled sections carry a hover-revealed **"…" overflow menu** for the actions that are worth
+    having but not a permanent icon: *Abrir pasta* and *Reprocessar* (story 41). The frequent ones
+    (copy, retry, delete) keep their own icons. Reprocess is hidden where there is no audio to run
+    again (a `recording`-stage death).
 - Prototype the panel decisions were reacted to:
   `https://claude.ai/code/artifact/656e3947-dad7-4887-9f54-1298080493d0`.
 
@@ -292,8 +304,13 @@ The PRD's non-goals (§8) plus the map's explicit exclusions:
   wrong, which is exactly why the `[? ?]` marking rule is the only defence against transcription error.
 - **Offline / local LLMs.** `gemma3:4b` was tested and froze on the prohibitions; cloud (via the
   `claude` subscription) is fine. Privacy is not a constraint.
-- **Reprocessing as a feature.** Re-running a stored transcript is a debug affordance only, not
-  user-facing.
+- ~~**Reprocessing as a feature.**~~ **Reversed (#24, story 41.)** The original call was that
+  re-running a stored transcript is a debug affordance only. It assumed a bad output always announces
+  itself as `failed`, which #24 disproved: a pass returned a chat reply instead of the dictation and
+  the item reached `organized` clean. With no runtime fidelity check, the pipeline cannot catch that,
+  so the user needs a way to re-run — otherwise the only recovery is deleting and speaking it again.
+  Still deliberately *not* in scope: re-running from a stored transcript or pivot (reprocess always
+  starts at the audio), and any per-run prompt or model choice.
 - **Long-form braindump to a saved markdown document.** The original framing, dropped.
 - **Windows, Linux, and languages beyond pt-BR with technical English.**
 - **The final product name.** `speech logger` is the working title; renaming is a later chore.

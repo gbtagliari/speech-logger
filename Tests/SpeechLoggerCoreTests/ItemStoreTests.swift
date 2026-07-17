@@ -332,6 +332,63 @@ final class ItemStoreTests {
         #expect(meta.duration == 12.5)  // the recording length survives, audio is reused
     }
 
+    @Test("requeueForReprocess sends an organized item back to queued and drops every derived file")
+    func requeueForReprocessClearsDerivedArtifacts() throws {
+        let item = try store.create()
+        _ = try store.markQueued(item.id, duration: 12.5)
+        _ = try store.markTranscribing(item.id)
+        try store.write(Data("mp3".utf8), to: ItemFile.audio, for: item.id)
+        try store.write(Data("bruto".utf8), to: ItemFile.transcript, for: item.id)
+        try store.write(Data("pivô".utf8), to: ItemFile.pass1, for: item.id)
+        _ = try store.markOrganizing(item.id)
+        _ = try store.markOrganized(item.id, finalText: "resposta de chat, não a ditada")
+
+        let meta = try store.requeueForReprocess(item.id)
+
+        #expect(meta.state == .queued)
+        #expect(meta.duration == 12.5)  // the recording length survives; the audio is the input
+        // The audio is the one thing reprocessing reuses; everything downstream of it goes.
+        #expect(store.hasContent(ItemFile.audio, for: item.id))
+        #expect(!store.hasContent(ItemFile.transcript, for: item.id))
+        #expect(!store.hasContent(ItemFile.pass1, for: item.id))
+        #expect(!store.hasContent(ItemFile.final, for: item.id))
+    }
+
+    @Test("requeueForReprocess clears a failed item's error, so the happy path is re-entered clean")
+    func requeueForReprocessClearsError() throws {
+        let item = try store.create()
+        _ = try store.markQueued(item.id, duration: 3)
+        _ = try store.markTranscribing(item.id)
+        _ = try store.fail(item.id, stage: .pass1, reason: .cliError, detail: "boom")
+
+        let meta = try store.requeueForReprocess(item.id)
+        #expect(meta.state == .queued)
+        #expect(meta.error == nil)
+    }
+
+    @Test("requeueForReprocess leaves no stale pivot for organizingResumeStage to trip on")
+    func requeueForReprocessResetsResumeStage() throws {
+        // The hazard: a stale `pass1.txt` makes a later retry resume at pass 2 and
+        // rewrite the *old* pivot — the exact garbage the reprocess was meant to undo.
+        let item = try store.create()
+        _ = try store.markQueued(item.id, duration: 1)
+        _ = try store.markTranscribing(item.id)
+        try store.write(Data("pivô velho".utf8), to: ItemFile.pass1, for: item.id)
+        _ = try store.markOrganizing(item.id)
+        _ = try store.markOrganized(item.id, finalText: "lixo")
+        #expect(store.organizingResumeStage(for: item.id) == .pass2)
+
+        _ = try store.requeueForReprocess(item.id)
+        #expect(store.organizingResumeStage(for: item.id) == .pass1)
+    }
+
+    @Test("reprocessing a missing item throws itemNotFound")
+    func requeueForReprocessMissingThrows() {
+        #expect(throws: StoreError.itemNotFound("gone")) {
+            _ = try store.requeueForReprocess("gone")
+        }
+    }
+
     @Test("resumeForOrganizing moves a failed item back to the transcribing handoff, clearing error")
     func resumeForOrganizingReenters() throws {
         let item = try store.create()

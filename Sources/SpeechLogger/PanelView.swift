@@ -72,7 +72,8 @@ struct PanelView: View {
                     justCopied: copiedID == row.id,
                     onCopy: { copy(row.id) },
                     onDelete: { viewModel.onDelete(row.id) },
-                    onOpenFolder: { viewModel.onOpenFolder(row.id) })
+                    onOpenFolder: { viewModel.onOpenFolder(row.id) },
+                    onReprocess: { viewModel.onReprocess(row.id) })
             }
         }
     }
@@ -85,7 +86,8 @@ struct PanelView: View {
                     row: row,
                     onRetry: { viewModel.onRetry(row.id) },
                     onDelete: { viewModel.onDelete(row.id) },
-                    onOpenFolder: { viewModel.onOpenFolder(row.id) })
+                    onOpenFolder: { viewModel.onOpenFolder(row.id) },
+                    onReprocess: { viewModel.onReprocess(row.id) })
             }
         }
     }
@@ -300,6 +302,9 @@ private struct ReadyRowView: View {
     let onCopy: () -> Void
     let onDelete: () -> Void
     let onOpenFolder: () -> Void
+    /// Always offered here: an organized item always has its audio, and this section
+    /// is where a fluent-but-wrong text is found (#24).
+    let onReprocess: () -> Void
     @State private var hovering = false
 
     var body: some View {
@@ -324,7 +329,7 @@ private struct ReadyRowView: View {
             Text("copiado").font(.system(size: 11, weight: .semibold)).foregroundStyle(.green)
         } else if hovering {
             HStack(spacing: 4) {
-                RowMenu(onOpenFolder: onOpenFolder)
+                RowMenu(onOpenFolder: onOpenFolder, onReprocess: onReprocess)
                 IconButton(systemName: "xmark", help: "apagar", action: onDelete)
             }
         } else {
@@ -340,6 +345,7 @@ private struct NeedsRowView: View {
     let onRetry: () -> Void
     let onDelete: () -> Void
     let onOpenFolder: () -> Void
+    let onReprocess: () -> Void
     @State private var hovering = false
 
     var body: some View {
@@ -362,7 +368,11 @@ private struct NeedsRowView: View {
                 if row.isRetryable {
                     IconButton(systemName: "arrow.clockwise", help: retryHelp, action: onRetry)
                 }
-                RowMenu(onOpenFolder: onOpenFolder)
+                // Reprocess sits behind the "..." next to retry, not instead of it: retry
+                // resumes from where this item died, reprocess starts over from the audio.
+                RowMenu(
+                    onOpenFolder: onOpenFolder,
+                    onReprocess: row.isReprocessable ? onReprocess : nil)
                 IconButton(systemName: "xmark", help: "apagar", action: onDelete)
             }
         } else {
@@ -399,9 +409,15 @@ private struct PulsingDot: View {
 /// permanent icon; the frequent ones (copy, retry, delete) stay where they are.
 private struct RowMenu: View {
     let onOpenFolder: () -> Void
+    /// Re-run the item whole (story 41). `nil` for a row with no audio to run again,
+    /// which drops the entry rather than showing one that would do nothing.
+    let onReprocess: (() -> Void)?
 
     var body: some View {
         Menu {
+            if let onReprocess {
+                Button("Reprocessar", action: onReprocess)
+            }
             Button("Abrir pasta", action: onOpenFolder)
         } label: {
             Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))

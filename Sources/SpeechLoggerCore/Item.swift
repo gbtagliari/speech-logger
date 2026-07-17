@@ -13,6 +13,10 @@ public enum ItemFile {
     public static let pass1 = "pass1.txt"
     /// The final pass-2 text. Exists only in `organized`; the only copyable-as-final text.
     public static let final = "final.txt"
+
+    /// Everything derived from `audio.mp3`, in pipeline order. Reprocessing an item
+    /// (#24) discards exactly these and keeps the audio, which is its input.
+    public static let derived = [transcript, pass1, final]
 }
 
 /// A log item as seen by callers: its directory name (a ULID) and current meta.
@@ -32,10 +36,20 @@ public struct Item: Equatable, Sendable, Identifiable {
     /// A stopped/broken item can be retried unless it died at `recording`, which
     /// has nothing to resume (SPEC "Storage and the item state machine", ADR-0006).
     public var isRetryable: Bool {
-        switch meta.state {
-        case .failed: return meta.error?.stage != .recording
-        case .cancelled: return meta.stoppedAt?.stage != .recording
-        case .recording, .queued, .transcribing, .organizing, .organized: return false
-        }
+        guard let stage = meta.deathStage else { return false }
+        return stage != .recording
+    }
+
+    /// A settled item can be reprocessed — re-run whole from `audio.mp3` — when that
+    /// audio is on disk, which is true of every item that got past the recording stage
+    /// (SPEC "Reprocess", #24).
+    ///
+    /// The `organized` arm is the whole difference from `isRetryable`: an item can reach
+    /// the happy-path terminal and still hold the wrong text (the SPEC deliberately does
+    /// not judge fidelity at runtime), and retry has no death stage to resume from there.
+    /// Off the happy path the two agree, but for different reasons — retry asks "is there
+    /// a stage to resume?", reprocess asks "is there audio to run again?".
+    public var isReprocessable: Bool {
+        meta.state == .organized || isRetryable
     }
 }

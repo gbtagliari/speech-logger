@@ -133,6 +133,24 @@ struct PanelModelTests {
         #expect(row.isRetryable)
     }
 
+    @Test("a death off the recording stage offers reprocess: its audio survived (#24)")
+    func needsRowReprocessable() {
+        let items = [item("f", created: base, state: .failed, failedStage: .pass2, reason: .cliError)]
+        let model = PanelModel.build(items: items, now: base, finalText: noText)
+        #expect(try! #require(model.needsYou.first).isReprocessable)
+    }
+
+    @Test("a recording-stage death offers neither retry nor reprocess: there is no audio")
+    func recordingDeathOffersNothing() {
+        let items = [
+            item("f", created: base, state: .failed, failedStage: .recording, reason: .noSpeech)
+        ]
+        let model = PanelModel.build(items: items, now: base, finalText: noText)
+        let row = try! #require(model.needsYou.first)
+        #expect(!row.isRetryable)
+        #expect(!row.isReprocessable)
+    }
+
     @Test("needs-you rows are newest first")
     func needsYouNewestFirst() {
         let items = [

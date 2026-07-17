@@ -58,6 +58,12 @@ public struct PanelModel: Equatable, Sendable {
         /// The pt-BR line ("Falhou · sem fala detectada" / "Cancelado na organização").
         public let label: String
         public let isRetryable: Bool
+        /// Whether the row offers "Reprocessar" — a full re-run from the audio (#24).
+        /// Carried separately from `isRetryable` because the two answer different
+        /// questions ("a stage to resume?" vs "audio to run again?"); they happen to
+        /// agree on every death, and diverge on `organized`, which is a `ReadyRow` and
+        /// so is always reprocessable and never retryable.
+        public let isReprocessable: Bool
         public let timeText: String
     }
 
@@ -134,13 +140,15 @@ public struct PanelModel: Equatable, Sendable {
             return NeedsRow(
                 id: item.id, kind: .cancelled,
                 label: "Cancelado na \(stageLabel(stage))",
-                isRetryable: item.isRetryable, timeText: timeText)
+                isRetryable: item.isRetryable, isReprocessable: item.isReprocessable,
+                timeText: timeText)
         default:  // .failed (callers pass only failed/cancelled)
             let reason = item.meta.error?.reason
             return NeedsRow(
                 id: item.id, kind: .failed,
                 label: "Falhou · \(reasonLabel(reason))",
-                isRetryable: item.isRetryable, timeText: timeText)
+                isRetryable: item.isRetryable, isReprocessable: item.isReprocessable,
+                timeText: timeText)
         }
     }
 

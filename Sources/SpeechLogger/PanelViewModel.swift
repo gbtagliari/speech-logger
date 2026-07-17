@@ -28,6 +28,9 @@ final class PanelViewModel: ObservableObject {
     var onDelete: (String) -> Void = { _ in }
     /// Retry a failed/cancelled item from the stage it died at (story 29).
     var onRetry: (String) -> Void = { _ in }
+    /// Re-run an item whole, from its audio, discarding what the last run produced
+    /// (story 41, #24). Confirms first — it throws away the current final text.
+    var onReprocess: (String) -> Void = { _ in }
     /// Stop an in-flight processing item — queued/transcribing/organizing (story 30).
     var onStop: (String) -> Void = { _ in }
     /// Reveal an item's directory in Finder, so its artifacts (audio, transcript,

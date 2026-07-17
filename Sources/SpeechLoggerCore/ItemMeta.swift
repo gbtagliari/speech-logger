@@ -82,6 +82,19 @@ public struct ItemMeta: Codable, Equatable, Sendable {
         state == .recording ? created : transitions[state.rawValue]
     }
 
+    /// The stage this item died at, or `nil` if it is not dead — the single place that
+    /// knows a `failed` item carries its stage under `error` and a `cancelled` one under
+    /// `stoppedAt`. Everything that reasons about running an item again (retry's resume
+    /// stage, both `isRetryable` and `isReprocessable`) reads it from here rather than
+    /// re-deriving the same two-arm switch.
+    public var deathStage: Stage? {
+        switch state {
+        case .failed: return error?.stage
+        case .cancelled: return stoppedAt?.stage
+        case .recording, .queued, .transcribing, .organizing, .organized: return nil
+        }
+    }
+
     /// A new meta advanced to a non-terminal happy-path state at `at`, optionally
     /// setting the recording `duration` (set on the move to `queued`). Clears any
     /// prior error/stoppedAt, since the happy path is being (re)entered.

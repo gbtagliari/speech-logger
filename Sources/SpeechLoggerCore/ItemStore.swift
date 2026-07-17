@@ -136,6 +136,35 @@ public struct ItemStore: Sendable {
         try persist(try meta(for: id).advancing(to: .queued, at: now()), for: id)
     }
 
+    /// Reprocess from the top: move a settled item back to `queued` and drop every
+    /// artifact derived from the audio, so the serial lane re-transcribes and both
+    /// passes run again over fresh text (#24). Preserves the recording `duration` and
+    /// `audio.mp3` — the input — and clears the error/stoppedAt.
+    ///
+    /// The derived files go *after* the state flips, mirroring the write order: content
+    /// becomes durable before the state that exposes it, so it stops being exposed before
+    /// it is removed. `final.txt` does briefly outlive the flip, but it is unreadable as
+    /// final the whole time — `finalText(for:)` gates on `state == .organized`. Flipping
+    /// first is what makes an interruption mid-sweep survivable: it leaves stale files
+    /// under a `queued` item, which the re-run overwrites, instead of an `organized` item
+    /// with no text to copy, which nothing recovers.
+    ///
+    /// Dropping `pass1.txt` is load-bearing, not tidiness: `organizingResumeStage` reads
+    /// the resume pass off its presence, so a stale pivot would send a later retry to
+    /// pass 2 to rewrite the very text the reprocess was undoing.
+    public func requeueForReprocess(_ id: String) throws(StoreError) -> ItemMeta {
+        let meta = try persist(try meta(for: id).advancing(to: .queued, at: now()), for: id)
+        for file in ItemFile.derived { try removeContent(file, for: id) }
+        return meta
+    }
+
+    /// Delete a content file if it is there. Absence is success: callers clear a stage's
+    /// artifacts without first knowing which of them a partial run got as far as writing.
+    private func removeContent(_ file: String, for id: String) throws(StoreError) {
+        guard hasContent(file, for: id) else { return }
+        try wrap { try FileManager.default.removeItem(at: fileURL(id, file)) }
+    }
+
     /// Retry from an organization stage: move a `failed`/`cancelled` item back to the
     /// `transcribing` handoff state so the parallel lane re-runs the passes, reusing
     /// the retained `transcript.txt` (and `pass1.txt` for a pass-2 resume). The lane's

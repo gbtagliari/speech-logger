@@ -68,6 +68,19 @@ Click a log entry, its final text is on your clipboard. The pipeline is asynchro
   (the explicit `state`, timestamps, duration, `error`, `schemaVersion`). Every write is
   temp+rename; delete goes to the macOS Trash.
 
+- **Retry** and **reprocess** — the two ways to run an item again, and they are not synonyms.
+  - **Retry** *resumes*: it re-enters at the stage the item died at and reuses what survived
+    (`audio.mp3`, `transcript.txt`, the `pass1.txt` pivot). Offered only on `failed`/`cancelled`,
+    and only off the recording stage. Cheap; changes as little as possible.
+  - **Reprocess** *starts over*: it discards everything derived from the audio and re-enters at
+    `queued`, so transcription and both passes run again. Offered on any item past the recording
+    stage, `organized` included. It is the answer to an item that finished *clean but wrong* (#24):
+    with no runtime fidelity check, a pass can return fluent text that is not the dictation, and
+    there is no failed stage for retry to resume from. It is the one control that confirms first.
+  - **Derived artifacts** — what reprocess discards: `transcript.txt`, `pass1.txt`, `final.txt`.
+    The audio is the input and survives. Dropping the pivot is load-bearing, not tidiness: the
+    resume pass is read off its presence, so a stale one would send a later retry to pass 2.
+
 ## Interaction terms
 
 - **The hotkey** — Right-Option double-tap (keyCode 61), 300 ms window, hard-coded, no rebind in

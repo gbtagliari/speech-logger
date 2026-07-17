@@ -53,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menubar.viewModel.onCopy = { [weak self] id in self?.copyFinalText(of: id) }
         menubar.viewModel.onDelete = { [weak self] id in self?.deleteItem(id) }
         menubar.viewModel.onRetry = { [weak self] id in self?.pipelineController?.retry(id) }
+        menubar.viewModel.onReprocess = { [weak self] id in self?.confirmReprocess(id) }
         menubar.viewModel.onStop = { [weak self] id in self?.pipelineController?.stop(id) }
         menubar.viewModel.onOpenFolder = { [weak self] id in self?.openFolder(of: id) }
         self.menubar = menubar
@@ -259,6 +260,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             log.error("delete failed for \(id, privacy: .public): \(String(describing: error))")
         }
         refresh()
+    }
+
+    /// Re-run an item whole, from its audio (story 41, #24), after confirming.
+    ///
+    /// The confirmation is asked for the one reason a modal earns its place here: the
+    /// click is not undoable. (The SPEC's modal prohibitions are about reporting a
+    /// missing permission or prerequisite, which must degrade instead — they do not
+    /// cover a destructive action, and this is the app's only one.) The current text is
+    /// discarded the moment the item leaves `organized`, the re-run
+    /// takes a transcription and two passes to produce a replacement, and that
+    /// replacement can land wrong too — which is the whole reason the user is here.
+    /// Delete needs no prompt because delete goes to the Trash; this has no Trash.
+    ///
+    /// Deferred one runloop turn because of where the click comes from: the panel is a
+    /// `.transient` popover and this fires from a menu inside it, so at this instant the
+    /// menu is still tracking and the popover is about to close on losing key. Running
+    /// the modal here would nest it inside both. By the next turn both have unwound and
+    /// the alert is the only thing on screen.
+    private func confirmReprocess(_ id: String) {
+        Task { @MainActor [weak self] in
+            guard self?.confirmsReprocess() == true else { return }
+            self?.pipelineController?.reprocess(id)
+        }
+    }
+
+    /// Ask, and report whether the user said go. `activate` first: this is an
+    /// `LSUIElement` accessory app, so without it the alert can open behind whatever
+    /// the user was actually working in.
+    private func confirmsReprocess() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Reprocessar esta gravação?"
+        alert.informativeText =
+            "A transcrição e a organização rodam de novo, a partir do áudio. O texto atual é "
+            + "descartado e não volta, mesmo se o novo sair pior."
+        alert.addButton(withTitle: "Reprocessar")
+        alert.addButton(withTitle: "Cancelar")
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     /// Open an item's directory in Finder, so its artifacts are reachable when the

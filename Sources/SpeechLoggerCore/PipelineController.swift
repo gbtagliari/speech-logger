@@ -74,15 +74,45 @@ import Foundation
     /// The stage a retryable item should resume from, or `nil` when it cannot be
     /// retried (not a terminal off-ramp, or a `recording` death with nothing to reuse).
     private func resumeStage(for id: String) -> Stage? {
-        guard let meta = try? store.meta(for: id) else { return nil }
-        let stage: Stage?
-        switch meta.state {
-        case .failed: stage = meta.error?.stage
-        case .cancelled: stage = meta.stoppedAt?.stage
-        case .recording, .queued, .transcribing, .organizing, .organized: return nil
-        }
-        guard let stage, stage != .recording else { return nil }
+        guard let stage = try? store.meta(for: id).deathStage, stage != .recording else { return nil }
         return stage
+    }
+
+    // MARK: - Reprocess (#24)
+
+    /// Re-run a settled item whole: discard everything derived from `audio.mp3` and
+    /// re-enter the serial transcription lane from `queued`, so the transcription and
+    /// both passes run again over fresh text.
+    ///
+    /// Distinct from `retry`, which resumes from the death stage and *reuses* the
+    /// retained artifacts. Reprocess exists because retry cannot reach the failure #24
+    /// documents: a pass can return fluent text that is not the dictation at all (there,
+    /// a chat reply), and the SPEC deliberately does not judge fidelity at runtime, so
+    /// the item lands `organized` with no error and no stage to resume from. Short of
+    /// this, the only recovery is deleting the item and speaking it again.
+    ///
+    /// It always re-enters at transcription, never at a pass: the stage that produced
+    /// the bad text is not knowable (nothing failed), so re-running the lot is the only
+    /// honest answer. An item still in flight, or one whose recording never produced
+    /// audio, is a no-op.
+    public func reprocess(_ id: String) {
+        guard let meta = try? store.meta(for: id),
+            Item(id: id, meta: meta).isReprocessable
+        else { return }
+        // Organization is disabled (the prompts failed to load — a packaging error).
+        // Refuse: this is the one control that destroys before it rebuilds, and with no
+        // organization lane the rebuild never comes. It would drop `final.txt` and park
+        // the item at `transcribing` forever, losing text that was fine. Retry can skip
+        // this guard for a transcription resume because it deletes nothing.
+        guard organization != nil else { return }
+        // The requeue is what makes the item `queued`, and the lane picks up nothing
+        // else — so a failed write must stop here rather than fall through to an
+        // `enqueue` that would quietly do nothing. Unlike retry, this click cost the
+        // user a confirmation, so "nothing happened" is the one outcome to rule out:
+        // the item stays as it was, still `organized`, still offering the menu entry.
+        guard (try? store.requeueForReprocess(id)) != nil else { return }
+        onStateChange?()
+        Task { await transcription.enqueue(id) }
     }
 
     // MARK: - Graceful quit (story 35, ADR-0006)
