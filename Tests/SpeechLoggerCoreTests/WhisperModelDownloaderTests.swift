@@ -7,9 +7,13 @@ import Testing
 /// run *without* `HF_HUB_OFFLINE=1` (SPEC "First-run preflight").
 struct WhisperModelDownloaderTests {
     private func emptyHub() -> WhisperModelCache {
-        WhisperModelCache(
-            hub: FileManager.default.temporaryDirectory
-                .appendingPathComponent("hub-\(UUID().uuidString)", isDirectory: true))
+        WhisperModelCache(hub: HubFixture.temporaryURL())
+    }
+
+    /// Stand-ins for the real binaries: the download is judged by the cache, so a run
+    /// that does nothing is exactly the "it did not download" case.
+    private func stubbedPaths(mlxWhisper: String = "/usr/bin/true") -> ToolchainPaths {
+        ToolchainPaths(mlxWhisper: mlxWhisper, ffmpeg: "/usr/bin/true", claude: "/usr/bin/true")
     }
 
     // MARK: - The environment
@@ -42,9 +46,7 @@ struct WhisperModelDownloaderTests {
     @Test("an absent mlx_whisper surfaces as launchFailed")
     func missingBinaryLaunchFails() async {
         let downloader = WhisperModelDownloader(
-            paths: ToolchainPaths(
-                mlxWhisper: "/nonexistent/mlx_whisper", ffmpeg: "/usr/bin/true", claude: "/usr/bin/true"),
-            cache: emptyHub())
+            paths: stubbedPaths(mlxWhisper: "/nonexistent/mlx_whisper"), cache: emptyHub())
         await #expect(throws: WhisperModelDownloadError.self) { try await downloader.download() }
     }
 
@@ -52,32 +54,33 @@ struct WhisperModelDownloaderTests {
     /// download worked. The cache is the only answer: still empty means still owed.
     @Test("a run that leaves the cache empty fails, whatever it exited with")
     func silentFailureIsCaught() async throws {
-        let downloader = WhisperModelDownloader(
-            paths: ToolchainPaths(
-                mlxWhisper: "/usr/bin/true", ffmpeg: "/usr/bin/true", claude: "/usr/bin/true"),
-            cache: emptyHub())
+        let downloader = WhisperModelDownloader(paths: stubbedPaths(), cache: emptyHub())
         await #expect(throws: WhisperModelDownloadError.self) { try await downloader.download() }
     }
 
     @Test("a run that fills the cache succeeds")
     func cachedAfterRunSucceeds() async throws {
-        let hub = FileManager.default.temporaryDirectory
-            .appendingPathComponent("hub-\(UUID().uuidString)", isDirectory: true)
+        let hub = try HubFixture.makeTemporary()
         defer { try? FileManager.default.removeItem(at: hub) }
-        let snapshot = hub.appendingPathComponent(
-            "models--mlx-community--whisper-large-v3-turbo/snapshots/rev", isDirectory: true)
-        let refs = hub.appendingPathComponent(
-            "models--mlx-community--whisper-large-v3-turbo/refs", isDirectory: true)
-        try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: refs, withIntermediateDirectories: true)
-        try Data("w".utf8).write(to: snapshot.appendingPathComponent("weights.safetensors"))
-        try Data("rev".utf8).write(to: refs.appendingPathComponent("main"))
-
         let downloader = WhisperModelDownloader(
-            paths: ToolchainPaths(
-                mlxWhisper: "/usr/bin/true", ffmpeg: "/usr/bin/true", claude: "/usr/bin/true"),
-            cache: WhisperModelCache(hub: hub))
+            paths: stubbedPaths(), cache: WhisperModelCache(hub: hub))
         try await downloader.download()
+    }
+
+    // MARK: - Telling the user
+
+    /// A download that fails must say so (story 37: "I learn what is missing instead of
+    /// hitting a silent failure"). The stderr tail stays in the log; this is the line
+    /// the panel shows.
+    @Test(
+        "every failure carries a pt-BR line for the panel",
+        arguments: [
+            WhisperModelDownloadError.launchFailed("x"),
+            .incomplete(detail: "x"),
+            .io("x"),
+        ])
+    func everyFailureIsPresentable(error: WhisperModelDownloadError) {
+        #expect(!error.message.isEmpty)
     }
 }
 

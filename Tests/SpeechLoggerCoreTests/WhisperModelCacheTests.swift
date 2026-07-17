@@ -7,29 +7,6 @@ import Testing
 /// `whisper-large-v3-turbo` download, and whether it is actually there. Preflight's
 /// "model downloaded" check is this, and nothing else (no `mlx_whisper` run).
 struct WhisperModelCacheTests {
-    /// A hub tree with `refs/main` pointing at a snapshot, the shape `huggingface_hub`
-    /// writes. `files` are created inside that snapshot.
-    private func makeHub(
-        revision: String = "a4aaeec",
-        files: [String] = ["config.json", "weights.safetensors"],
-        repo: String = "models--mlx-community--whisper-large-v3-turbo"
-    ) throws -> URL {
-        let hub = FileManager.default.temporaryDirectory
-            .appendingPathComponent("hub-\(UUID().uuidString)", isDirectory: true)
-        let root = hub.appendingPathComponent(repo, isDirectory: true)
-        let snapshot = root
-            .appendingPathComponent("snapshots", isDirectory: true)
-            .appendingPathComponent(revision, isDirectory: true)
-        try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
-        for file in files {
-            try Data("x".utf8).write(to: snapshot.appendingPathComponent(file))
-        }
-        let refs = root.appendingPathComponent("refs", isDirectory: true)
-        try FileManager.default.createDirectory(at: refs, withIntermediateDirectories: true)
-        try Data(revision.utf8).write(to: refs.appendingPathComponent("main"))
-        return hub
-    }
-
     // MARK: - Locating the hub
 
     @Test("the hub defaults to ~/.cache/huggingface/hub")
@@ -76,21 +53,19 @@ struct WhisperModelCacheTests {
 
     @Test("a hub with the model's weights under refs/main reads as cached")
     func cachedModelDetected() throws {
-        let hub = try makeHub()
+        let hub = try HubFixture.makeTemporary()
         defer { try? FileManager.default.removeItem(at: hub) }
         #expect(WhisperModelCache(hub: hub).isCached(model: Transcriber.model))
     }
 
     @Test("an absent hub reads as not cached")
     func absentHub() {
-        let hub = FileManager.default.temporaryDirectory
-            .appendingPathComponent("hub-\(UUID().uuidString)", isDirectory: true)
-        #expect(!WhisperModelCache(hub: hub).isCached(model: Transcriber.model))
+        #expect(!WhisperModelCache(hub: HubFixture.temporaryURL()).isCached(model: Transcriber.model))
     }
 
     @Test("a different model cached does not satisfy ours")
     func otherModelDoesNotCount() throws {
-        let hub = try makeHub(repo: "models--mlx-community--whisper-tiny")
+        let hub = try HubFixture.makeTemporary(repo: "models--mlx-community--whisper-tiny")
         defer { try? FileManager.default.removeItem(at: hub) }
         #expect(!WhisperModelCache(hub: hub).isCached(model: Transcriber.model))
     }
@@ -99,39 +74,32 @@ struct WhisperModelCacheTests {
     /// alone would call that a hit, and the first dictation would die `HF_HUB_OFFLINE`.
     @Test("a snapshot with no weights reads as not cached")
     func partialDownloadIsNotCached() throws {
-        let hub = try makeHub(files: ["config.json"])
+        let hub = try HubFixture.makeTemporary(files: ["config.json"])
         defer { try? FileManager.default.removeItem(at: hub) }
         #expect(!WhisperModelCache(hub: hub).isCached(model: Transcriber.model))
     }
 
     @Test("a missing refs/main reads as not cached")
     func missingRefIsNotCached() throws {
-        let hub = try makeHub()
+        let hub = try HubFixture.makeTemporary()
         defer { try? FileManager.default.removeItem(at: hub) }
-        let ref = hub
-            .appendingPathComponent("models--mlx-community--whisper-large-v3-turbo/refs/main")
-        try FileManager.default.removeItem(at: ref)
+        try FileManager.default.removeItem(at: HubFixture.ref(in: hub))
         #expect(!WhisperModelCache(hub: hub).isCached(model: Transcriber.model))
     }
 
     @Test("a ref pointing at a snapshot that is not there reads as not cached")
     func danglingRefIsNotCached() throws {
-        let hub = try makeHub(revision: "abc")
+        let hub = try HubFixture.makeTemporary(revision: "abc")
         defer { try? FileManager.default.removeItem(at: hub) }
-        let snapshot = hub
-            .appendingPathComponent(
-                "models--mlx-community--whisper-large-v3-turbo/snapshots/abc", isDirectory: true)
-        try FileManager.default.removeItem(at: snapshot)
+        try FileManager.default.removeItem(at: HubFixture.snapshot(in: hub, revision: "abc"))
         #expect(!WhisperModelCache(hub: hub).isCached(model: Transcriber.model))
     }
 
     @Test("surrounding whitespace in refs/main is tolerated")
     func refIsTrimmed() throws {
-        let hub = try makeHub()
+        let hub = try HubFixture.makeTemporary()
         defer { try? FileManager.default.removeItem(at: hub) }
-        let ref = hub
-            .appendingPathComponent("models--mlx-community--whisper-large-v3-turbo/refs/main")
-        try Data("a4aaeec\n".utf8).write(to: ref)
+        try Data("a4aaeec\n".utf8).write(to: HubFixture.ref(in: hub))
         #expect(WhisperModelCache(hub: hub).isCached(model: Transcriber.model))
     }
 
@@ -139,11 +107,9 @@ struct WhisperModelCacheTests {
     /// let the probe walk out of the hub and find some unrelated file.
     @Test("a ref that escapes the snapshots directory reads as not cached")
     func traversingRefIsNotCached() throws {
-        let hub = try makeHub()
+        let hub = try HubFixture.makeTemporary()
         defer { try? FileManager.default.removeItem(at: hub) }
-        let ref = hub
-            .appendingPathComponent("models--mlx-community--whisper-large-v3-turbo/refs/main")
-        try Data("../../..".utf8).write(to: ref)
+        try Data("../../..".utf8).write(to: HubFixture.ref(in: hub))
         #expect(!WhisperModelCache(hub: hub).isCached(model: Transcriber.model))
     }
 }

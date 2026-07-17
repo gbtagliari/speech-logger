@@ -28,14 +28,7 @@ struct PreflightTests {
             try Data("{}".utf8).write(to: credentials)
 
             let hub = root.appendingPathComponent("hub", isDirectory: true)
-            let snapshot = hub.appendingPathComponent(
-                "models--mlx-community--whisper-large-v3-turbo/snapshots/rev", isDirectory: true)
-            let refs = hub.appendingPathComponent(
-                "models--mlx-community--whisper-large-v3-turbo/refs", isDirectory: true)
-            try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: refs, withIntermediateDirectories: true)
-            try Data("w".utf8).write(to: snapshot.appendingPathComponent("weights.safetensors"))
-            try Data("rev".utf8).write(to: refs.appendingPathComponent("main"))
+            try HubFixture.create(at: hub)
 
             configuration = PreflightConfiguration(
                 paths: ToolchainPaths(

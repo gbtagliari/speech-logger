@@ -15,6 +15,9 @@ final class PanelViewModel: ObservableObject {
     /// The model download is running: the fix is in flight, so the banner shows
     /// progress instead of offering the click again.
     @Published var isDownloadingModel = false
+    /// Why the last download click failed, in pt-BR, or nil if none has. Without it a
+    /// dead network would stop the spinner and change nothing else on screen.
+    @Published var modelDownloadFailure: String?
     /// The live recording clock, driven by the menubar's per-second timer so the
     /// panel's *Acontecendo agora* clock matches the menubar title exactly.
     @Published var recordingSeconds = 0

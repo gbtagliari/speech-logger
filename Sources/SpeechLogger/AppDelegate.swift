@@ -168,16 +168,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Download the Whisper model — the one prerequisite preflight fixes (story 39),
     /// on the user's click. Long (~1.5 GB) and nothing waits on it: the panel shows it
-    /// running, and the re-check afterwards is what clears the banner. A failure stays
-    /// a failure in the report, so the click is simply offered again.
+    /// running, and the re-check afterwards is what clears the banner.
+    ///
+    /// A failure is told, not swallowed (story 37): the banner keeps the click and
+    /// gains the reason, while the stderr tail behind it goes to the log. The report
+    /// itself stays red either way, since only the cache can turn it green.
     private func downloadWhisperModel() {
         guard let menubar, !menubar.viewModel.isDownloadingModel else { return }
         menubar.viewModel.isDownloadingModel = true
+        menubar.viewModel.modelDownloadFailure = nil
         Task { @MainActor [weak self] in
+            // `as WhisperModelDownloadError` because a bare `catch` widens the typed
+            // throw back to `any Error`, and the pt-BR line lives on the typed one.
             do {
                 try await WhisperModelDownloader().download()
-            } catch {
+            } catch let error as WhisperModelDownloadError {
                 self?.log.error("whisper model download failed: \(String(describing: error))")
+                self?.menubar?.viewModel.modelDownloadFailure = error.message
             }
             self?.menubar?.viewModel.isDownloadingModel = false
             self?.refreshPreflight()

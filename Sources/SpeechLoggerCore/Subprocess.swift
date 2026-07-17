@@ -15,6 +15,30 @@ struct SubprocessLaunchError: Error {
     let message: String
 }
 
+/// How much of a subprocess's stderr rides along in an error. Enough to carry the
+/// telltale line each failure has, capped so a runaway log never bloats `meta.json`.
+private let stderrTailLimit = 2000
+
+/// Launch a binary, await its exit, and return its stderr tail — the shape both
+/// `mlx_whisper` callers need, because that contract makes stderr the *only* clue to
+/// a failure (it exits 0 on every one) while never being a failure signal itself (a
+/// HuggingFace progress bar rides there on success). stdout is discarded.
+///
+/// Throws `SubprocessLaunchError` only if the process cannot start; the caller wraps
+/// that in its own typed error.
+func runCapturingStderrTail(
+    executable: String,
+    arguments: [String],
+    environment: [String: String]
+) async throws(SubprocessLaunchError) -> String {
+    let result = try await runSubprocess(
+        executable: executable, arguments: arguments, environment: environment,
+        discardStdout: true)
+    let stderr = String(decoding: result.stderr, as: UTF8.self)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    return String(stderr.suffix(stderrTailLimit))
+}
+
 /// A thread-safe holder so a task-cancellation handler can terminate a running
 /// `Process`. The launch and the cancellation race: whichever runs second still
 /// terminates the process (the handler sets `cancelled`; `adopt` honours it, and

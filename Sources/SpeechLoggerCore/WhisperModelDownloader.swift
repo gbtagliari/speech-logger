@@ -10,6 +10,18 @@ public enum WhisperModelDownloadError: Error, Equatable {
     case incomplete(detail: String)
     /// A filesystem failure staging the run's throwaway input.
     case io(String)
+
+    /// The pt-BR line the panel shows when the click did not work. Without it the
+    /// spinner would simply stop and leave the same banner behind, which is the silent
+    /// failure story 37 exists to prevent. The `detail` stays in the log: it is a
+    /// stderr tail, not something to read in a menubar popover.
+    public var message: String {
+        switch self {
+        case .launchFailed: return "Não deu pra executar o mlx_whisper. Confira a instalação."
+        case .incomplete: return "O download não terminou. Confira a conexão e tente de novo."
+        case .io: return "Não deu pra preparar o download."
+        }
+    }
 }
 
 /// The one thing preflight fixes: downloading the ~1.5 GB Whisper model, as a
@@ -76,18 +88,13 @@ public struct WhisperModelDownloader: Sendable {
     /// progress bar on success, the cause on failure). Runs off the calling actor so
     /// the download never blocks the UI.
     private func run(arguments: [String]) async throws(WhisperModelDownloadError) -> String {
-        let environment = Self.environment(
-            base: ProcessInfo.processInfo.environment, ffmpegDir: ffmpegDir)
-        let result: SubprocessResult
         do {
-            result = try await runSubprocess(
-                executable: mlxWhisper, arguments: arguments, environment: environment,
-                discardStdout: true)
+            return try await runCapturingStderrTail(
+                executable: mlxWhisper, arguments: arguments,
+                environment: Self.environment(
+                    base: ProcessInfo.processInfo.environment, ffmpegDir: ffmpegDir))
         } catch {
             throw WhisperModelDownloadError.launchFailed("\(error)")
         }
-        let stderr = String(decoding: result.stderr, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return String(stderr.suffix(2000))
     }
 }

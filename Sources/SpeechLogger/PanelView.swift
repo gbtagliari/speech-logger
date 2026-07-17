@@ -100,6 +100,7 @@ struct PanelView: View {
                     PreflightFailureView(
                         check: failure.check,
                         isDownloadingModel: viewModel.isDownloadingModel,
+                        downloadFailure: viewModel.modelDownloadFailure,
                         onFix: { fix(failure.check) })
                 }
             }
@@ -162,6 +163,9 @@ struct PanelView: View {
 private struct PreflightFailureView: View {
     let check: PreflightCheck
     let isDownloadingModel: Bool
+    /// Why the last download click did not work, if it did not. Shown under the model
+    /// check only: it is the one check whose fix can fail on us rather than on the user.
+    let downloadFailure: String?
     let onFix: () -> Void
 
     var body: some View {
@@ -177,20 +181,22 @@ private struct PreflightFailureView: View {
     }
 
     @ViewBuilder private var fixControl: some View {
-        switch check.fix {
-        case .openInputMonitoringSettings:
-            Button("Abrir Ajustes do Sistema…", action: onFix).font(.system(size: 12))
-        case .downloadWhisperModel:
-            if isDownloadingModel {
+        if let fix = check.fix {
+            if fix == .downloadWhisperModel, isDownloadingModel {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small).scaleEffect(0.7)
                     Text("Baixando…").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             } else {
-                Button("Baixar modelo", action: onFix).font(.system(size: 12))
+                // The click is always offered again: a failed download is retryable,
+                // and the report stays red until the cache says otherwise.
+                Button(fix.title, action: onFix).font(.system(size: 12))
+                if fix == .downloadWhisperModel, let downloadFailure {
+                    Text(downloadFailure)
+                        .font(.system(size: 11)).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-        case nil:
-            EmptyView()
         }
     }
 

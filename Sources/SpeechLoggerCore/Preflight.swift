@@ -59,6 +59,15 @@ public enum PreflightFix: Sendable, Equatable {
     case openInputMonitoringSettings
     /// Run the model download (`mlx_whisper` without `HF_HUB_OFFLINE=1`).
     case downloadWhisperModel
+
+    /// The pt-BR button label, kept beside the titles it sits under rather than in the
+    /// view, so the panel's wording lives in one place (as `PanelModel`'s does).
+    public var title: String {
+        switch self {
+        case .openInputMonitoringSettings: return "Abrir Ajustes do Sistema…"
+        case .downloadWhisperModel: return "Baixar modelo"
+        }
+    }
 }
 
 /// One check and how it came out.
