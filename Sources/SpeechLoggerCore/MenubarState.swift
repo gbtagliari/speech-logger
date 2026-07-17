@@ -6,8 +6,8 @@ import Foundation
 public enum MenubarState: Sendable, Equatable {
     /// The mic is live. Highest priority — recording always owns the glyph.
     case recording
-    /// At least one item is `failed`. Persistent and easy to miss, so it outranks
-    /// live processing (story 36).
+    /// At least one item is `failed`, or a preflight prerequisite is missing.
+    /// Persistent and easy to miss, so it outranks live processing (story 36).
     case failed
     /// Input Monitoring is not granted: the hotkey is deaf until it is fixed. Shown
     /// only when not recording/failed, so it never masks live work.
@@ -22,7 +22,9 @@ public enum MenubarState: Sendable, Equatable {
     ///
     /// - Parameters:
     ///   - isRecording: the mic is currently live.
-    ///   - hasFailed: any item is in the `failed` state.
+    ///   - hasFailed: any item is in the `failed` state, or preflight found a missing
+    ///     prerequisite (they share the tier: both mean "something needs you", and the
+    ///     panel is where they are told apart).
     ///   - needsPermission: `CGPreflightListenEventAccess()` is false at launch.
     ///   - hasProcessing: any item is `queued` / `transcribing` / `organizing`.
     public static func resolve(
@@ -38,13 +40,18 @@ public enum MenubarState: Sendable, Equatable {
         return .idle
     }
 
-    /// Convenience: derive the item-driven flags from a list of items, then resolve.
+    /// Convenience: derive the item-driven flags from a list of items and the two
+    /// preflight tiers from the launch report, then resolve.
+    ///
+    /// A missing prerequisite folds into `failed` — the aggregate tier the SPEC asks
+    /// for — while a denied Input Monitoring keeps its own `needsPermission` glyph: it
+    /// is the one failure that silences the hotkey, and it says so with a lock.
     public static func resolve(
         items: [Item],
         isRecording: Bool,
-        needsPermission: Bool
+        preflight: PreflightReport
     ) -> MenubarState {
-        let hasFailed = items.contains { $0.state == .failed }
+        let hasFailed = items.contains { $0.state == .failed } || preflight.hasFailedPrerequisite
         let hasProcessing = items.contains {
             switch $0.state {
             case .queued, .transcribing, .organizing: return true
@@ -54,7 +61,7 @@ public enum MenubarState: Sendable, Equatable {
         return resolve(
             isRecording: isRecording,
             hasFailed: hasFailed,
-            needsPermission: needsPermission,
+            needsPermission: preflight.needsPermission,
             hasProcessing: hasProcessing)
     }
 }

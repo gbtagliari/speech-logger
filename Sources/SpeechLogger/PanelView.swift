@@ -38,8 +38,8 @@ struct PanelView: View {
     @ViewBuilder private var content: some View {
         ScrollView {
             VStack(spacing: 0) {
-                if viewModel.needsPermission { permissionBanner }
-                if viewModel.model.isEmpty && !viewModel.needsPermission {
+                preflightBanner
+                if viewModel.model.isEmpty && viewModel.preflight.isSatisfied {
                     emptyState
                 } else {
                     liveSection
@@ -90,18 +90,31 @@ struct PanelView: View {
         }
     }
 
-    private var permissionBanner: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("Monitoramento de Entrada desativado", systemImage: "exclamationmark.lock")
-                .foregroundStyle(.orange).font(.system(size: 12, weight: .medium))
-            Text("O atalho fica surdo até você permitir.")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-            Button("Abrir Ajustes do Sistema…") { viewModel.onOpenSettings() }
-                .font(.system(size: 12))
+    /// The degraded state, never a modal (SPEC): one line per failing prerequisite,
+    /// each with what breaks and the way out. The app stays usable behind it, and the
+    /// hotkey keeps recording.
+    @ViewBuilder private var preflightBanner: some View {
+        if !viewModel.preflight.isSatisfied {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(viewModel.preflight.failures) { failure in
+                    PreflightFailureView(
+                        check: failure.check,
+                        isDownloadingModel: viewModel.isDownloadingModel,
+                        onFix: { fix(failure.check) })
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 13).padding(.vertical, 10)
+            .background(Color.orange.opacity(0.08))
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 13).padding(.vertical, 10)
-        .background(Color.orange.opacity(0.08))
+    }
+
+    private func fix(_ check: PreflightCheck) {
+        switch check.fix {
+        case .openInputMonitoringSettings: viewModel.onOpenSettings()
+        case .downloadWhisperModel: viewModel.onDownloadModel()
+        case nil: break
+        }
     }
 
     private var emptyState: some View {
@@ -138,6 +151,51 @@ struct PanelView: View {
             try? await Task.sleep(for: .seconds(1))
             if copiedID == id { copiedID = nil }
         }
+    }
+}
+
+// MARK: - Preflight failure
+
+/// One failing prerequisite: what is missing, why it matters, and the fix when there
+/// is one to offer. Two of the six checks are fixable from here (the model download
+/// and the Settings pane); the rest are check-and-report, so they carry text only.
+private struct PreflightFailureView: View {
+    let check: PreflightCheck
+    let isDownloadingModel: Bool
+    let onFix: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label(check.title, systemImage: glyphName)
+                .foregroundStyle(.orange).font(.system(size: 12, weight: .medium))
+            Text(check.detail)
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            fixControl
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var fixControl: some View {
+        switch check.fix {
+        case .openInputMonitoringSettings:
+            Button("Abrir Ajustes do Sistema…", action: onFix).font(.system(size: 12))
+        case .downloadWhisperModel:
+            if isDownloadingModel {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small).scaleEffect(0.7)
+                    Text("Baixando…").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            } else {
+                Button("Baixar modelo", action: onFix).font(.system(size: 12))
+            }
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private var glyphName: String {
+        check == .inputMonitoring ? "exclamationmark.lock" : "exclamationmark.triangle"
     }
 }
 

@@ -19,8 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkeyMonitor: HotkeyMonitor?
     private var menubar: MenubarController?
     private var readyNotifier: ReadyNotifier?
-    /// True when Input Monitoring is not granted; drives the degraded glyph.
-    private var needsPermission = false
+    /// The prerequisite check (SPEC "First-run preflight"): read at launch, re-read on
+    /// focus and panel-open. It reports; it never gates the hotkey.
+    private var preflight = PreflightReport.satisfied
     /// Set once the graceful-quit sweep is running, so a re-entrant terminate request
     /// falls straight through instead of starting a second sweep.
     private var isQuitting = false
@@ -43,8 +44,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menubar = MenubarController()
-        menubar.onPanelWillOpen = { [weak self] in self?.refresh() }
+        // Panel-open is one of preflight's two re-check moments (SPEC): the panel is
+        // where the failures are read, so it must not show a stale one.
+        menubar.onPanelWillOpen = { [weak self] in self?.refreshPreflight() }
         menubar.viewModel.onOpenSettings = { InputMonitoring.openSettings() }
+        menubar.viewModel.onDownloadModel = { [weak self] in self?.downloadWhisperModel() }
         menubar.viewModel.onQuit = { NSApp.terminate(nil) }
         menubar.viewModel.onCopy = { [weak self] id in self?.copyFinalText(of: id) }
         menubar.viewModel.onDelete = { [weak self] id in self?.deleteItem(id) }
@@ -105,7 +109,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.hotkeyMonitor = hotkeyMonitor
 
         installHotkey()
-        refresh()
+        // The launch-time read, which also does the first `refresh()`.
+        refreshPreflight()
     }
 
     /// Graceful quit that never blocks (story 35, ADR-0006). Defer termination just
@@ -127,24 +132,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyMonitor?.stop()
     }
 
-    /// A grant does not update preflight live within a process (it is a launch-time
-    /// read), so this mostly no-ops until relaunch — but it is cheap and recovers if
-    /// the monitor can now be installed.
+    /// Focus is preflight's other re-check moment (SPEC): the user leaves to install a
+    /// binary or flip the Settings toggle and comes back, and the report must follow.
+    ///
+    /// The Input Monitoring grant is the one check that will not move here — it is a
+    /// launch-time read, so a fresh grant needs a relaunch (ADR-0005) — but the retry
+    /// is cheap and recovers if the monitor can now be installed after all.
     func applicationDidBecomeActive(_ notification: Notification) {
-        guard needsPermission else { return }
-        installHotkey()
-        refresh()
+        if preflight.needsPermission { installHotkey() }
+        refreshPreflight()
     }
 
     // MARK: - Wiring
 
     private func installHotkey() {
         let granted = hotkeyMonitor?.start() ?? false
-        needsPermission = !granted
         if !granted {
             // Prompts once iff no prior TCC decision; otherwise a no-op and the
             // menubar's Settings deep-link is the path.
             InputMonitoring.request()
+        }
+    }
+
+    /// Re-read the prerequisites and push the result to the menubar. Cheap (five
+    /// `stat`s and a `CGPreflightListenEventAccess()`), so it can ride the launch,
+    /// focus and panel-open moments the SPEC asks for.
+    ///
+    /// Nothing here gates recording: a prerequisite missing at capture time still
+    /// records, and the item lands as a retryable `failed`/`missing_binary` from the
+    /// lane that hits it (story 40).
+    private func refreshPreflight() {
+        preflight = Preflight.run(inputMonitoringGranted: InputMonitoring.isGranted)
+        refresh()
+    }
+
+    /// Download the Whisper model — the one prerequisite preflight fixes (story 39),
+    /// on the user's click. Long (~1.5 GB) and nothing waits on it: the panel shows it
+    /// running, and the re-check afterwards is what clears the banner. A failure stays
+    /// a failure in the report, so the click is simply offered again.
+    private func downloadWhisperModel() {
+        guard let menubar, !menubar.viewModel.isDownloadingModel else { return }
+        menubar.viewModel.isDownloadingModel = true
+        Task { @MainActor [weak self] in
+            do {
+                try await WhisperModelDownloader().download()
+            } catch {
+                self?.log.error("whisper model download failed: \(String(describing: error))")
+            }
+            self?.menubar?.viewModel.isDownloadingModel = false
+            self?.refreshPreflight()
         }
     }
 
@@ -155,7 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let state = MenubarState.resolve(
             items: items,
             isRecording: coordinator?.isRecording ?? false,
-            needsPermission: needsPermission)
+            preflight: preflight)
         menubar?.update(state)
 
         let model = PanelModel.build(
@@ -171,7 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return nil
                 }
             })
-        menubar?.updatePanel(model, needsPermission: needsPermission)
+        menubar?.updatePanel(model, preflight: preflight)
     }
 
     /// Raise the ready notification for a just-organized item (stories 21, 27). Fired
@@ -232,7 +268,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Build the organization lane, loading the two bundled prompts. If they cannot
     /// load — a build/packaging error, never expected at runtime — organization is
     /// disabled (nil): transcribed items rest at `transcribing` rather than every one
-    /// failing on a missing prompt, and preflight (a later ticket) surfaces the cause.
+    /// failing on a missing prompt. It is not a preflight check: preflight is about the
+    /// user's machine, and a bundled resource that did not ship is our bug, logged here.
     /// When wired, the lane advances `organizing` -> `organized` and raises the ready
     /// notification via `onOrganized`.
     private func makeOrganizationLane(store: ItemStore) -> OrganizationLane? {

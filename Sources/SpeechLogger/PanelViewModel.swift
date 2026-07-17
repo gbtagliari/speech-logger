@@ -9,8 +9,12 @@ import SpeechLoggerCore
 final class PanelViewModel: ObservableObject {
     /// The three sections, rebuilt from the item list on each refresh.
     @Published var model = PanelModel(live: [], ready: [], needsYou: [])
-    /// Input Monitoring is not granted: show the degraded banner and its deep-link.
-    @Published var needsPermission = false
+    /// The launch-time prerequisite check (SPEC "First-run preflight"): its failures
+    /// are the panel's degraded banner. Re-read on focus and panel-open, never a modal.
+    @Published var preflight = PreflightReport.satisfied
+    /// The model download is running: the fix is in flight, so the banner shows
+    /// progress instead of offering the click again.
+    @Published var isDownloadingModel = false
     /// The live recording clock, driven by the menubar's per-second timer so the
     /// panel's *Acontecendo agora* clock matches the menubar title exactly.
     @Published var recordingSeconds = 0
@@ -28,5 +32,7 @@ final class PanelViewModel: ObservableObject {
     var onOpenFolder: (String) -> Void = { _ in }
     /// Deep-link to the Input Monitoring pane (degraded state).
     var onOpenSettings: () -> Void = {}
+    /// Download the Whisper model — the one prerequisite preflight can fix (story 39).
+    var onDownloadModel: () -> Void = {}
     var onQuit: () -> Void = {}
 }

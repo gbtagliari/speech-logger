@@ -45,11 +45,11 @@ import SwiftUI
         render()
     }
 
-    /// Push a fresh panel model into the view (SPEC "UI"). `needsPermission` drives
-    /// the degraded banner shown inside the panel.
-    func updatePanel(_ model: PanelModel, needsPermission: Bool) {
+    /// Push a fresh panel model into the view (SPEC "UI"). `preflight` drives the
+    /// degraded banner shown inside the panel: one line per failing prerequisite.
+    func updatePanel(_ model: PanelModel, preflight: PreflightReport) {
         viewModel.model = model
-        viewModel.needsPermission = needsPermission
+        viewModel.preflight = preflight
     }
 
     // MARK: - Glyph rendering
