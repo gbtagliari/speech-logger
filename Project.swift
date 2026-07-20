@@ -24,6 +24,10 @@ let appSigningSettings: SettingsDictionary = [
     "CODE_SIGN_IDENTITY[sdk=macosx*]": "speech-logger-selfsigned",
     "DEVELOPMENT_TEAM": "",
     "ENABLE_HARDENED_RUNTIME": "NO",
+    // App icon: compiled from Resources/Assets.xcassets (AppIcon.appiconset).
+    // The app is accessory (LSUIElement, no Dock icon), but the icon still shows
+    // in Finder, the installer, and notifications.
+    "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
 ]
 
 let project = Project(
@@ -48,6 +52,8 @@ let project = Project(
                     "speech logger records your dictation to transcribe it locally.",
             ]),
             sources: ["Sources/SpeechLogger/**"],
+            // Asset catalog holding the app icon (AppIcon.appiconset).
+            resources: ["Sources/SpeechLogger/Resources/**"],
             entitlements: .file(path: "Support/SpeechLogger.entitlements"),
             dependencies: [.target(name: "SpeechLoggerCore")],
             settings: .settings(base: appSigningSettings)
