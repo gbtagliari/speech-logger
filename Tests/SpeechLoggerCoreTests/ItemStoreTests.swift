@@ -138,12 +138,12 @@ final class ItemStoreTests {
         let item = try store.create()
         _ = try store.markQueued(item.id, duration: 1)
         _ = try store.markTranscribing(item.id)
-        let failed = try store.fail(item.id, stage: .transcription, reason: .noSpeech, detail: "silent")
+        let failed = try store.fail(item.id, stage: .transcription, reason: .emptyOutput, detail: "empty transcript")
         #expect(failed.state == .failed)
         #expect(failed.error?.stage == .transcription)
-        #expect(failed.error?.reason == .noSpeech)
-        #expect(failed.error?.detail == "silent")
-        #expect(try store.meta(for: item.id).error?.reason == .noSpeech)
+        #expect(failed.error?.reason == .emptyOutput)
+        #expect(failed.error?.detail == "empty transcript")
+        #expect(try store.meta(for: item.id).error?.reason == .emptyOutput)
     }
 
     @Test("cancel records the stop stage, distinct from a failure")

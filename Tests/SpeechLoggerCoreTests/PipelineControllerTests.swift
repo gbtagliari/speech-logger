@@ -74,7 +74,7 @@ import Testing
     func retryRecordingStageIsNoOp() async throws {
         let ctx = try Context()
         let item = try ctx.store.create()
-        _ = try ctx.store.fail(item.id, stage: .recording, reason: .noSpeech, detail: "silent")
+        _ = try ctx.store.fail(item.id, stage: .recording, reason: .cliError, detail: "encode failed")
 
         ctx.controller.retry(item.id)
         // Give any (erroneous) async re-entry a chance to run, then assert it did not.
@@ -155,7 +155,7 @@ import Testing
     func reprocessRecordingStageIsNoOp() async throws {
         let ctx = try Context()
         let item = try ctx.store.create()
-        _ = try ctx.store.fail(item.id, stage: .recording, reason: .noSpeech, detail: "silent")
+        _ = try ctx.store.fail(item.id, stage: .recording, reason: .cliError, detail: "encode failed")
 
         ctx.controller.reprocess(item.id)
         try await Task.sleep(for: .milliseconds(50))
@@ -328,7 +328,7 @@ private let rerunFinalText = FakeOrganizer.rewritten("ANNOTATED[raw transcript]"
     func stop() -> RecordingCapture {
         let url = wav!
         wav = nil
-        return RecordingCapture(wav: url, duration: 8, peak: 0.4)
+        return RecordingCapture(wav: url, duration: 8, windowEnergies: Array(repeating: 0.09, count: 400))
     }
 }
 

@@ -156,7 +156,6 @@ public struct PanelModel: Equatable, Sendable {
 
     private static func reasonLabel(_ reason: FailureReason?) -> String {
         switch reason {
-        case .noSpeech: return "sem fala detectada"
         case .emptyOutput: return "saída vazia"
         case .cliError: return "erro no processamento"
         case .missingBinary: return "dependência ausente"

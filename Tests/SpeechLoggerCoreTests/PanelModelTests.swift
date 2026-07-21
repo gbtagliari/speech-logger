@@ -112,14 +112,16 @@ struct PanelModelTests {
         #expect(row.isRetryable)
     }
 
-    @Test("a no_speech failure at the recording stage is not retryable")
-    func noSpeechNotRetryable() {
+    @Test("a failure at the recording stage is not retryable: no audio survived it")
+    func recordingFailureNotRetryable() {
+        // The only recording-stage failure left is a broken encode. `no_speech` is
+        // gone (#46): a recording with no speech in it is discarded, never failed.
         let items = [
-            item("f", created: base, state: .failed, failedStage: .recording, reason: .noSpeech)
+            item("f", created: base, state: .failed, failedStage: .recording, reason: .cliError)
         ]
         let model = PanelModel.build(items: items, now: base, finalText: noText)
         let row = try! #require(model.needsYou.first)
-        #expect(row.label == "Falhou · sem fala detectada")
+        #expect(row.label == "Falhou · erro no processamento")
         #expect(!row.isRetryable)
     }
 
@@ -143,7 +145,7 @@ struct PanelModelTests {
     @Test("a recording-stage death offers neither retry nor reprocess: there is no audio")
     func recordingDeathOffersNothing() {
         let items = [
-            item("f", created: base, state: .failed, failedStage: .recording, reason: .noSpeech)
+            item("f", created: base, state: .failed, failedStage: .recording, reason: .cliError)
         ]
         let model = PanelModel.build(items: items, now: base, finalText: noText)
         let row = try! #require(model.needsYou.first)

@@ -52,8 +52,11 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   - `failed` — **terminal, broke.** Carries `error: { stage, reason, detail, at }`.
   - `cancelled` — **terminal, you stopped it.** No error; carries `stoppedAt: { stage, at }`.
   - **`stage`** ∈ `recording | transcription | pass1 | pass2`.
-  - **`reason`** ∈ `no_speech | empty_output | cli_error | missing_binary | interrupted | timeout`
-    (`timeout` is reserved; nothing ships that produces it in the MVP).
+  - **`reason`** ∈ `empty_output | cli_error | missing_binary | interrupted | timeout`
+    (`timeout` is reserved; nothing ships that produces it in the MVP). There is no `no_speech`:
+    a recording with no speech in it is **discarded**, not failed (#46). `empty_output` keeps its
+    name rather than absorbing that meaning, because corrupt audio produces the identical
+    signal — an empty transcript — and "no speech" would assert a cause never observed.
 
 - **The two passes** — how organization works, and the reason this tool exists (ADR-0001).
   **Braindump only**; dictation has no LLM in its path.
@@ -146,7 +149,21 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   - **Recording wins the key.** While a recording is in flight, *any* gesture only stops it; the
     grammar applies from idle only.
   - **Minimum duration is per mode**: 1.0 s braindump, **350 ms dictation** (`manda`, `commita` are
-    legitimate dictations). The energy floor is the second net for both.
+    legitimate dictations). The speech test is the second net for both.
+
+- **The speech test** — the guard's energy verdict, and the reason a silent recording leaves
+  nothing behind (#46). The capture accumulates the **RMS of fixed ~20 ms windows**, spanning the
+  audio tap's buffers (whose size is a hint, not a guarantee), and hands the guard the **raw window
+  sequence**. The verdict is *the fraction of windows above a floor*: a running peak would let one
+  key click carry an empty recording into transcription, and a global average would dilute as a
+  recording grew, sending a long braindump full of thinking pauses toward the silence verdict
+  precisely as it got longer. A fraction is duration-invariant. Both thresholds — what counts as a
+  loud window, and what fraction is enough — live at the **one seam** in `RecordingGuard`, which is
+  what makes offline calibration against recorded fixtures possible, and both err toward accepting:
+  a false "has speech" costs one hallucinated item you delete, a false "silent" deletes real speech
+  invisibly. **Accepted residual:** the test passes and Whisper hallucinates rather than returning
+  empty, so the post-transcription `empty_output` net does not fire and the item carries invented
+  text. That is the tolerated direction of error, chosen over silent deletion.
 
 - **Passthrough** — the app **cannot swallow** the gesture; the key also reaches the frontmost app.
   Benign — verified for a tap (ADR-0004) and for a multi-second hold on 3 targets (#35): no character,

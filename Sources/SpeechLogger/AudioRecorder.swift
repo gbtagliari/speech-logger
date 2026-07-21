@@ -8,7 +8,7 @@ import os
 /// native and does not resample itself.
 ///
 /// While recording it accumulates the two measurements the dual guard needs: the
-/// peak sample amplitude and the frame count (for duration). The audio tap runs on
+/// per-window RMS sequence and the frame count (for duration). The audio tap runs on
 /// a real-time thread, so that state lives behind a lock in `CaptureState`.
 @MainActor final class AudioRecorder: AudioRecording {
     enum RecorderError: Error {
@@ -18,6 +18,8 @@ import os
 
     private let log = Logger(subsystem: "app.speech-logger", category: "recorder")
     private let engine = AVAudioEngine()
+    /// Off unless `SPEECH_LOGGER_ENERGY_DUMP` is set; see `EnergyDump`.
+    private let energyDump = EnergyDump()
     private var state: CaptureState?
     private var wavURL: URL?
     private var sampleRate: Double = 0
@@ -48,7 +50,10 @@ import os
         } catch {
             throw RecorderError.engineFailed("opening wav for writing: \(error)")
         }
-        let state = CaptureState(file: file)
+        // The window is a fixed span of time, so its size in frames follows the
+        // device's native rate. `max(1, …)` only guards against a nonsense rate.
+        let windowFrames = max(1, Int((format.sampleRate * RecordingCapture.windowDuration).rounded()))
+        let state = CaptureState(file: file, windowFrames: windowFrames)
 
         // The tap fires on a realtime audio thread. Mark the block `@Sendable` so it
         // is non-isolated: without this the compiler infers `@MainActor` isolation
@@ -73,7 +78,7 @@ import os
         engine.inputNode.removeTap(onBus: 0)  // no more writes after this
         engine.stop()
 
-        let snapshot = state?.snapshot ?? (peak: 0, frames: 0, droppedWrites: 0)
+        let snapshot = state?.snapshot ?? (windowEnergies: [], frames: 0, droppedWrites: 0)
         if snapshot.droppedWrites > 0 {
             // The energy/duration measurements still hold, but the retained wav is
             // missing frames — record it rather than swallow it.
@@ -87,54 +92,103 @@ import os
         wavURL = nil
         sampleRate = 0
 
-        return RecordingCapture(wav: url, duration: duration, peak: snapshot.peak)
+        energyDump.write(snapshot.windowEnergies)
+        return RecordingCapture(wav: url, duration: duration, windowEnergies: snapshot.windowEnergies)
     }
 }
 
-/// Thread-safe accumulation for the audio tap: the file write plus the running
-/// peak and frame count. The tap fires on a real-time thread; `snapshot` is read
-/// on the main actor after the tap is removed.
+/// Accumulation for the audio tap: the file write plus the per-window RMS sequence
+/// and the frame count. The tap fires on a real-time thread; `snapshot` is read on
+/// the main actor after the tap is removed.
+///
+/// Windows are fixed and span buffer boundaries: a window's partial sum carries over
+/// to the next buffer and closes when `windowFrames` frames have gone into it. The
+/// tap's `bufferSize` is a hint AVFoundation is free to ignore, so measuring per
+/// buffer would leave the window size at the mercy of the device.
+///
+/// **Why the energy state is not under the lock.** The tap is its *only* writer, and
+/// the per-sample fold plus the array growth are exactly the work that must not run
+/// while holding a lock on a real-time thread. Visibility instead comes from the lock
+/// the tap takes immediately afterwards for the shared counters: those writes are
+/// released by `unlock`, and `snapshot`'s `lock` acquires that same release, so
+/// everything the tap wrote before it is visible to the reader. `snapshot` runs only
+/// after `removeTap`, so there is no concurrent writer to race with either.
 private final class CaptureState: @unchecked Sendable {
     private let lock = NSLock()
     private let file: AVAudioFile
-    private var peak: Float = 0
+    /// Frames per energy window, at the device's native sample rate.
+    private let windowFrames: Int
+
+    // Tap-only state. See the note above on why it carries no lock.
+    private var windowEnergies: [Float] = []
+    /// The window currently filling: sum of squared samples, how many samples went
+    /// into that sum, and how many frames it has taken.
+    private var windowSquares: Float = 0
+    private var windowSquareCount = 0
+    private var windowFilled = 0
+
+    // Shared counters, guarded by `lock`.
     private var frames: AVAudioFrameCount = 0
     private var droppedWrites = 0
 
-    init(file: AVAudioFile) { self.file = file }
+    init(file: AVAudioFile, windowFrames: Int) {
+        self.file = file
+        self.windowFrames = windowFrames
+        // A minute of headroom, so the common recording never reallocates on the
+        // audio thread. Past it, doubling makes a growth a rare event, not a
+        // per-window one.
+        windowEnergies.reserveCapacity(Int(60 / RecordingCapture.windowDuration))
+    }
 
     func append(_ buffer: AVAudioPCMBuffer) {
         // Cannot throw off the real-time tap; count a failed write so the loss is
         // reported, not silently swallowed.
         var didWrite = true
         do { try file.write(from: buffer) } catch { didWrite = false }
-        let bufferPeak = Self.peak(of: buffer)
+        accumulate(buffer)
         lock.lock()
-        peak = max(peak, bufferPeak)
         frames += buffer.frameLength
         if !didWrite { droppedWrites += 1 }
         lock.unlock()
     }
 
-    var snapshot: (peak: Float, frames: AVAudioFrameCount, droppedWrites: Int) {
+    /// The trailing partial window is included: dropping it would throw away up to
+    /// 20 ms, which is a fifth of a 100 ms utterance's evidence.
+    var snapshot: (windowEnergies: [Float], frames: AVAudioFrameCount, droppedWrites: Int) {
         lock.lock()
         defer { lock.unlock() }
-        return (peak, frames, droppedWrites)
+        let trailing = windowSquareCount > 0 ? [(windowSquares / Float(windowSquareCount)).squareRoot()] : []
+        return (windowEnergies + trailing, frames, droppedWrites)
     }
 
-    /// Max absolute sample across all channels. `AVAudioEngine` input is float32,
-    /// so `floatChannelData` is present; a non-float format (not seen in practice)
-    /// yields 0 and the dual guard would flag silence — acceptable, and loud.
-    private static func peak(of buffer: AVAudioPCMBuffer) -> Float {
-        guard let channels = buffer.floatChannelData else { return 0 }
+    /// Fold the buffer into the window sequence, closing a window every
+    /// `windowFrames` frames.
+    ///
+    /// A window's energy is the RMS across all channels of its frames, so a stereo
+    /// device with one dead channel halves the measured energy rather than reporting
+    /// the louder channel. The floor is set well below speech precisely so that kind
+    /// of margin is absorbed.
+    ///
+    /// `AVAudioEngine` input is float32, so `floatChannelData` is present. A non-float
+    /// format (not seen in practice) contributes no windows at all, which the guard
+    /// reads as *measured nothing* rather than as silence — the recording is kept.
+    private func accumulate(_ buffer: AVAudioPCMBuffer) {
+        guard let channels = buffer.floatChannelData else { return }
+        let channelCount = Int(buffer.format.channelCount)
         let frameLength = Int(buffer.frameLength)
-        var maxAbs: Float = 0
-        for channel in 0..<Int(buffer.format.channelCount) {
-            let samples = channels[channel]
-            for frame in 0..<frameLength {
-                maxAbs = max(maxAbs, abs(samples[frame]))
+        for frame in 0..<frameLength {
+            for channel in 0..<channelCount {
+                let sample = channels[channel][frame]
+                windowSquares += sample * sample
+            }
+            windowSquareCount += channelCount
+            windowFilled += 1
+            if windowFilled >= windowFrames {
+                windowEnergies.append((windowSquares / Float(windowSquareCount)).squareRoot())
+                windowSquares = 0
+                windowSquareCount = 0
+                windowFilled = 0
             }
         }
-        return maxAbs
     }
 }

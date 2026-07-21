@@ -48,8 +48,12 @@ public enum Stage: String, Codable, Sendable, CaseIterable {
 
 /// Why a `failed` item broke (CONTEXT.md). `timeout` is reserved; nothing in the
 /// MVP produces it.
+///
+/// There is no `no_speech`: a recording with no speech in it is discarded and leaves
+/// nothing behind, at any duration (#46). `empty_output` keeps its name rather than
+/// absorbing that meaning, because corrupt audio produces the identical signal — an
+/// empty transcript — and calling it "no speech" would assert a cause never observed.
 public enum FailureReason: String, Codable, Sendable, CaseIterable {
-    case noSpeech = "no_speech"
     case emptyOutput = "empty_output"
     case cliError = "cli_error"
     case missingBinary = "missing_binary"
