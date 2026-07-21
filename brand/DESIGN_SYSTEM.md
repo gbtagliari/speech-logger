@@ -4,9 +4,9 @@ The visual identity for **speech-logger**, a calm macOS menubar app that turns s
 organized text without changing what was said. This document is the source of truth for the
 mark, the color system, typography, and how the assets are wired into the app.
 
-> **Working title.** `speech-logger` is a working name (see [`PRD.md`](../PRD.md) §9). The
-> identity is deliberately **name-agnostic**: the symbol carries the brand, so swapping the
-> wordmark later is cheap.
+> **Working title.** `speech-logger` is a working name, still open. The identity is
+> deliberately **name-agnostic**: the symbol carries the brand, so swapping the wordmark
+> later is cheap.
 
 A browsable version of this guide is published as an Artifact:
 <https://claude.ai/code/artifact/ac12e0f8-1a9f-40d8-bba8-24bb2303a6b9>
