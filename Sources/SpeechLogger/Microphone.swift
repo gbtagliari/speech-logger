@@ -51,13 +51,18 @@ enum Microphone {
         return .usable
     }
 
-    /// Open System Settings straight to the Microphone privacy pane.
+    /// Open System Settings straight to the Microphone privacy pane. The anchored
+    /// legacy form, the same one `InputMonitoring.openSettings` already relies on.
     static func openPrivacySettings() {
         open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
     }
 
     /// Open System Settings straight to Sound, where the input device and its volume
-    /// live — the pane that owns a muted or gainless mic.
+    /// live: the pane that owns a muted or gainless mic.
+    ///
+    /// The identifier is verified, not assumed — it is the `CFBundleIdentifier` of
+    /// `/System/Library/ExtensionKit/Extensions/Sound.appex` (macOS 26.5). A settings
+    /// deep-link that silently opens nothing is worse than offering no button at all.
     static func openSoundSettings() {
         open("x-apple.systempreferences:com.apple.Sound-Settings.extension")
     }

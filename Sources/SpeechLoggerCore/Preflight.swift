@@ -72,6 +72,11 @@ public enum PreflightCheck: String, Sendable, Equatable, CaseIterable {
     /// Only what is ours to fix: the download we run, and the Settings pane that owns
     /// the problem. Installing a binary, logging into `claude` or plugging in a
     /// microphone is the user's terminal or the user's desk, not something a button does.
+    ///
+    /// The Sound pane on `microphoneLevel` goes past what #45 asked for (it required
+    /// only that the row *name* what to fix). Kept deliberately, because the rule above
+    /// is "the pane that owns the problem", and dropping this one would apply that rule
+    /// to two permission rows and then stop for no reason a reader could reconstruct.
     public var fix: PreflightFix? {
         switch self {
         case .whisperModel: return .downloadWhisperModel

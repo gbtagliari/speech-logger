@@ -206,6 +206,13 @@ private struct PreflightFailureView: View {
 
     /// A withheld permission gets the lock; everything else gets the triangle. The
     /// distinction is what the user has to do, not how bad it is.
+    ///
+    /// This widens a rule that used to name one check (`inputMonitoring`) rather than a
+    /// kind, which #45 did not ask for. The alternative was a second permission row
+    /// wearing the triangle, which would leave the lock meaning "Input Monitoring
+    /// specifically" — a distinction with nothing behind it. Note the lock is about the
+    /// *action*, not the menubar tier: a microphone problem still aggregates into
+    /// `failed`, since it is not the hotkey going deaf (`PreflightReport`).
     private var glyphName: String {
         switch check {
         case .inputMonitoring, .microphonePermission:
