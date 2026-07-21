@@ -44,13 +44,15 @@ public struct ItemStore: Sendable {
     // MARK: - Create
 
     /// Create a new item at `recording`: a fresh ULID directory with `meta.json`.
-    public func create() throws(StoreError) -> Item {
+    ///
+    /// `mode` defaults to `braindump`, mirroring how an absent `mode` reads off disk —
+    /// one rule, both directions: unspecified means braindump.
+    public func create(mode: ItemMode = .braindump) throws(StoreError) -> Item {
         let created = now()
         let id = makeID(created)
         let dir = directory(for: id)
         try wrap { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
-        let meta = ItemMeta.recording(created: created)
-        try writeMeta(meta, for: id)
+        let meta = try persist(ItemMeta.recording(created: created, mode: mode), for: id)
         return Item(id: id, meta: meta)
     }
 
@@ -98,18 +100,29 @@ public struct ItemStore: Sendable {
         try persist(try meta(for: id).advancing(to: .transcribing, at: now()), for: id)
     }
 
-    /// Transcription done, organization starting: move to `organizing`.
+    /// Transcription done, organization starting: move to `organizing`. Braindump only —
+    /// a dictation has no organization stage and is refused here (#41).
     public func markOrganizing(_ id: String) throws(StoreError) -> ItemMeta {
         try persist(try meta(for: id).advancing(to: .organizing, at: now()), for: id)
     }
 
-    /// Happy path terminal: write the final pass-2 text, *then* flip to `organized`.
-    /// The content is durable before the state that makes it copyable, so the
-    /// invariant "final text present only in `organized`" cannot be half-observed.
+    /// Dictation's happy-path terminal: the transcript is the output, so the item rests
+    /// at `transcribed` rather than entering organization. Dictation only — a braindump
+    /// is refused here, the mirror of `markOrganizing` refusing a dictation (#41).
+    public func markTranscribed(_ id: String) throws(StoreError) -> ItemMeta {
+        try persist(try meta(for: id).advancing(to: .transcribed, at: now()), for: id)
+    }
+
+    /// Braindump's happy path terminal: write the final pass-2 text, *then* flip to
+    /// `organized`. The content is durable before the state that makes it copyable, so
+    /// the invariant "final text present only in `organized`" cannot be half-observed.
     public func markOrganized(_ id: String, finalText: String) throws(StoreError) -> ItemMeta {
-        let current = try meta(for: id)
+        let next = try meta(for: id).advancing(to: .organized, at: now())
+        // Checked before the content write, not just in `persist`: a refused transition
+        // must leave no orphan `final.txt` behind for a later read to trip on.
+        try requireReachable(next, for: id)
         try write(Data(finalText.utf8), to: ItemFile.final, for: id)
-        return try persist(current.advancing(to: .organized, at: now()), for: id)
+        return try persist(next, for: id)
     }
 
     /// Terminal off-ramp: the item broke at `stage` for `reason`.
@@ -152,8 +165,17 @@ public struct ItemStore: Sendable {
     /// Dropping `pass1.txt` is load-bearing, not tidiness: `organizingResumeStage` reads
     /// the resume pass off its presence, so a stale pivot would send a later retry to
     /// pass 2 to rewrite the very text the reprocess was undoing.
+    ///
+    /// Refused outright for a dictation (#41). `Item.isReprocessable` already hides the
+    /// control, but that is a UI predicate and this is the one call that deletes before
+    /// it rebuilds: on a dictation it would drop the transcript — the mode's only output
+    /// — to re-run passes that never existed. The guard belongs where the destruction is.
     public func requeueForReprocess(_ id: String) throws(StoreError) -> ItemMeta {
-        let meta = try persist(try meta(for: id).advancing(to: .queued, at: now()), for: id)
+        let current = try meta(for: id)
+        guard current.mode == .braindump else {
+            throw StoreError.reprocessUnavailable(id: id, mode: current.mode)
+        }
+        let meta = try persist(current.advancing(to: .queued, at: now()), for: id)
         for file in ItemFile.derived { try removeContent(file, for: id) }
         return meta
     }
@@ -280,7 +302,7 @@ public struct ItemStore: Sendable {
         case .recording: return .recording
         case .queued, .transcribing: return .transcription
         case .organizing: return organizingResumeStage(for: id)
-        case .organized, .failed, .cancelled:
+        case .transcribed, .organized, .failed, .cancelled:
             return .recording // unreachable: callers filter terminal states first
         }
     }
@@ -304,8 +326,19 @@ public struct ItemStore: Sendable {
 
     @discardableResult
     private func persist(_ meta: ItemMeta, for id: String) throws(StoreError) -> ItemMeta {
+        try requireReachable(meta, for: id)
         try writeMeta(meta, for: id)
         return meta
+    }
+
+    /// Refuse a state the item's mode never reaches (#41). Every transition funnels
+    /// through `persist`, so this one guard is what makes "a braindump never rests in
+    /// `transcribed`, a dictation never reaches `organizing`" a property of the disk
+    /// rather than a convention each caller has to keep.
+    private func requireReachable(_ meta: ItemMeta, for id: String) throws(StoreError) {
+        guard meta.mode.reaches(meta.state) else {
+            throw StoreError.unreachableState(id: id, mode: meta.mode, state: meta.state)
+        }
     }
 
     private func writeMeta(_ meta: ItemMeta, for id: String) throws(StoreError) {

@@ -2,8 +2,12 @@ import Foundation
 
 /// The canonical state of a log item (CONTEXT.md, ADR-0003, ADR-0006).
 ///
-/// Happy path: `recording` -> `queued` -> `transcribing` -> `organizing` ->
-/// `organized`. `failed` and `cancelled` are terminal off-ramps.
+/// The happy path forks by `ItemMode` after `transcribing`:
+/// - braindump: `recording` -> `queued` -> `transcribing` -> `organizing` -> `organized`
+/// - dictation: `recording` -> `queued` -> `transcribing` -> `transcribed`
+///
+/// `failed` and `cancelled` are terminal off-ramps shared by both. Which states a mode
+/// can actually reach is `ItemMode.reaches(_:)`, not encoded here.
 public enum ItemState: String, Codable, Sendable, CaseIterable {
     /// Mic is live, no content yet (a running clock).
     case recording
@@ -11,9 +15,14 @@ public enum ItemState: String, Codable, Sendable, CaseIterable {
     case queued
     /// `mlx_whisper` is running.
     case transcribing
-    /// The two LLM passes are running.
+    /// Terminal, happy path, `mode: dictation` only: the transcript is the output and
+    /// there is no organization stage to enter. `organized` cannot serve here — it
+    /// names a stage that never runs for the mode.
+    case transcribed
+    /// The two LLM passes are running. `mode: braindump` only.
     case organizing
-    /// Terminal, happy path: the final pass-2 text exists and is copyable.
+    /// Terminal, happy path, `mode: braindump` only: the final pass-2 text exists and
+    /// is copyable.
     case organized
     /// Terminal, broke: carries `error: { stage, reason, detail, at }`.
     case failed
@@ -23,7 +32,7 @@ public enum ItemState: String, Codable, Sendable, CaseIterable {
     /// A terminal state does not advance and is never touched by boot recovery.
     public var isTerminal: Bool {
         switch self {
-        case .organized, .failed, .cancelled: return true
+        case .transcribed, .organized, .failed, .cancelled: return true
         case .recording, .queued, .transcribing, .organizing: return false
         }
     }

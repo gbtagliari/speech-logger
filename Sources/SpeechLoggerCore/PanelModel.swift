@@ -127,7 +127,7 @@ public struct PanelModel: Equatable, Sendable {
             return LiveRow(id: item.id, kind: .transcribing, label: "Transcrevendo")
         case .organizing:
             return LiveRow(id: item.id, kind: .organizing, label: "Organizando")
-        case .organized, .failed, .cancelled:
+        case .transcribed, .organized, .failed, .cancelled:
             return nil
         }
     }

@@ -134,7 +134,7 @@ import Foundation
             case .organizing:
                 // Pinpoint the pass from the surviving pivot so retry resumes right.
                 _ = try? store.cancel(item.id, stage: store.organizingResumeStage(for: item.id))
-            case .recording, .organized, .failed, .cancelled:
+            case .recording, .transcribed, .organized, .failed, .cancelled:
                 break
             }
         }

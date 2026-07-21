@@ -20,6 +20,16 @@ struct ItemMetaTests {
         #expect(meta.error == nil)
         #expect(meta.stoppedAt == nil)
         #expect(meta.schemaVersion == ItemMeta.currentSchemaVersion)
+        #expect(meta.mode == .braindump)
+    }
+
+    @Test("mode carries forward across every transition helper")
+    func modeCarriesForward() {
+        let start = ItemMeta.recording(created: created, mode: .dictation)
+        #expect(start.mode == .dictation)
+        #expect(start.advancing(to: .queued, at: at, duration: 1).mode == .dictation)
+        #expect(start.failing(stage: .transcription, reason: .cliError, detail: nil, at: at).mode == .dictation)
+        #expect(start.cancelling(stage: .transcription, at: at).mode == .dictation)
     }
 
     @Test("advancing returns a new meta and never mutates the original (immutability)")
@@ -74,9 +84,9 @@ struct ItemMetaTests {
         #expect(retried.error == nil)
     }
 
-    @Test("meta round-trips through the ISO-8601 JSON form")
-    func roundTripsThroughJSON() throws {
-        let original = ItemMeta.recording(created: created)
+    @Test("meta round-trips through the ISO-8601 JSON form", arguments: ItemMode.allCases)
+    func roundTripsThroughJSON(mode: ItemMode) throws {
+        let original = ItemMeta.recording(created: created, mode: mode)
             .advancing(to: .queued, at: at, duration: 4.2)
             .failing(stage: .pass1, reason: .emptyOutput, detail: "empty", at: at)
         let encoder = JSONEncoder()
@@ -85,10 +95,33 @@ struct ItemMetaTests {
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try decoder.decode(ItemMeta.self, from: try encoder.encode(original))
         #expect(decoded == original)
+        #expect(decoded.mode == mode)
     }
 
-    @Test("only organized, failed, and cancelled are terminal")
+    @Test("a meta.json written before mode existed reads back as a braindump (no migration pass)")
+    func absentModeReadsAsBraindump() throws {
+        // Verbatim shape of a schema-version-1 `meta.json`: no `mode` key at all.
+        let legacy = """
+            {
+              "created" : "2023-11-14T22:13:20Z",
+              "schemaVersion" : 1,
+              "state" : "organized",
+              "transitions" : { "organized" : "2023-11-14T22:14:10Z" }
+            }
+            """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(ItemMeta.self, from: Data(legacy.utf8))
+        #expect(decoded.mode == .braindump)
+        #expect(decoded.state == .organized)
+        // Read back as written — a decode upgrades nothing. The upgrade happens on the
+        // next *write*, which is where the bytes actually change shape.
+        #expect(decoded.schemaVersion == 1)
+    }
+
+    @Test("both happy-path terminals, plus failed and cancelled, are terminal")
     func terminalStates() {
+        #expect(ItemState.transcribed.isTerminal)
         #expect(ItemState.organized.isTerminal)
         #expect(ItemState.failed.isTerminal)
         #expect(ItemState.cancelled.isTerminal)
@@ -96,5 +129,12 @@ struct ItemMetaTests {
         #expect(!ItemState.queued.isTerminal)
         #expect(!ItemState.transcribing.isTerminal)
         #expect(!ItemState.organizing.isTerminal)
+    }
+
+    @Test("a transcribed item did not die, so it has no death stage")
+    func transcribedHasNoDeathStage() {
+        let meta = ItemMeta.recording(created: created, mode: .dictation)
+            .advancing(to: .transcribed, at: at)
+        #expect(meta.deathStage == nil)
     }
 }

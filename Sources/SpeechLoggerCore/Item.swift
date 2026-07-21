@@ -49,7 +49,12 @@ public struct Item: Equatable, Sendable, Identifiable {
     /// not judge fidelity at runtime), and retry has no death stage to resume from there.
     /// Off the happy path the two agree, but for different reasons — retry asks "is there
     /// a stage to resume?", reprocess asks "is there audio to run again?".
+    ///
+    /// **Never true for a dictation** (#41): reprocess exists to start the LLM run over,
+    /// and the mode has no LLM run. Its recovery is retry, which re-transcribes, or
+    /// speaking it again — both cheap for an utterance you read in two seconds.
     public var isReprocessable: Bool {
-        meta.state == .organized || isRetryable
+        guard meta.mode == .braindump else { return false }
+        return meta.state == .organized || isRetryable
     }
 }

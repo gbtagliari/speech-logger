@@ -55,7 +55,7 @@ public enum MenubarState: Sendable, Equatable {
         let hasProcessing = items.contains {
             switch $0.state {
             case .queued, .transcribing, .organizing: return true
-            case .recording, .organized, .failed, .cancelled: return false
+            case .recording, .transcribed, .organized, .failed, .cancelled: return false
             }
         }
         return resolve(

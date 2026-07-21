@@ -415,6 +415,187 @@ final class ItemStoreTests {
         #expect(meta.stoppedAt == nil)
     }
 
+    // MARK: - Dictation mode (#41)
+
+    @Test("a dictation walks recording -> queued -> transcribing -> transcribed")
+    func dictationHappyPath() throws {
+        let item = try store.create(mode: .dictation)
+        let id = item.id
+        #expect(item.meta.mode == .dictation)
+
+        #expect(try store.markQueued(id, duration: 0.9).state == .queued)
+        #expect(try store.markTranscribing(id).state == .transcribing)
+        try store.write(Data("manda o commit".utf8), to: ItemFile.transcript, for: id)
+        #expect(try store.markTranscribed(id).state == .transcribed)
+
+        let onDisk = try store.meta(for: id)
+        #expect(onDisk.state == .transcribed)
+        #expect(onDisk.mode == .dictation)
+        #expect(onDisk.timestamp(of: .transcribing)! < onDisk.timestamp(of: .transcribed)!)
+        // No LLM stage ran, so neither artifact exists.
+        #expect(!store.hasContent(ItemFile.pass1, for: id))
+        #expect(!store.hasContent(ItemFile.final, for: id))
+    }
+
+    @Test("mode round-trips through meta.json", arguments: ItemMode.allCases)
+    func modeRoundTripsThroughDisk(mode: ItemMode) throws {
+        let item = try store.create(mode: mode)
+        #expect(try store.meta(for: item.id).mode == mode)
+    }
+
+    @Test("a meta.json written before mode existed reads back as a braindump")
+    func legacyMetaOnDiskReadsAsBraindump() throws {
+        // Not a synthesized fixture: the exact bytes a schema-version-1 build wrote,
+        // with the store's own fractional-second ISO-8601 stamps and no `mode` key.
+        let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        let dir = root.appendingPathComponent(id, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let legacy = """
+            {
+              "created" : "2023-11-14T22:13:20.000Z",
+              "duration" : 8,
+              "schemaVersion" : 1,
+              "state" : "organized",
+              "transitions" : { "organized" : "2023-11-14T22:14:10.000Z" }
+            }
+            """
+        try Data(legacy.utf8).write(to: dir.appendingPathComponent(ItemFile.meta))
+
+        let meta = try store.meta(for: id)
+        #expect(meta.mode == .braindump)
+        #expect(meta.state == .organized)
+        #expect(meta.duration == 8)
+    }
+
+    @Test("the store refuses to park a dictation in organization")
+    func dictationCannotOrganize() throws {
+        let item = try store.create(mode: .dictation)
+        _ = try store.markQueued(item.id, duration: 1)
+        _ = try store.markTranscribing(item.id)
+
+        #expect(throws: StoreError.unreachableState(id: item.id, mode: .dictation, state: .organizing)) {
+            _ = try store.markOrganizing(item.id)
+        }
+        // The refusal leaves the item where it was, not half-moved.
+        #expect(try store.meta(for: item.id).state == .transcribing)
+    }
+
+    @Test("the store refuses to write a braindump's final text on a dictation")
+    func dictationCannotOrganizeFinalText() throws {
+        let item = try store.create(mode: .dictation)
+        _ = try store.markQueued(item.id, duration: 1)
+        _ = try store.markTranscribing(item.id)
+
+        #expect(throws: StoreError.unreachableState(id: item.id, mode: .dictation, state: .organized)) {
+            _ = try store.markOrganized(item.id, finalText: "não deveria existir")
+        }
+        // The refusal happens before the content write, so no orphan final.txt is left
+        // behind for a later read to trip on.
+        #expect(!store.hasContent(ItemFile.final, for: item.id))
+    }
+
+    @Test("the store refuses to rest a braindump in transcribed")
+    func braindumpCannotRestInTranscribed() throws {
+        let item = try store.create()
+        _ = try store.markQueued(item.id, duration: 1)
+        _ = try store.markTranscribing(item.id)
+
+        #expect(throws: StoreError.unreachableState(id: item.id, mode: .braindump, state: .transcribed)) {
+            _ = try store.markTranscribed(item.id)
+        }
+        #expect(try store.meta(for: item.id).state == .transcribing)
+    }
+
+    @Test("transcribed is terminal: boot recovery does not touch it")
+    func recoveryLeavesTranscribedAlone() throws {
+        let item = try store.create(mode: .dictation)
+        _ = try store.markQueued(item.id, duration: 1)
+        _ = try store.markTranscribing(item.id)
+        _ = try store.markTranscribed(item.id)
+
+        #expect(try store.recoverOrphans().isEmpty)
+        #expect(try store.meta(for: item.id).state == .transcribed)
+    }
+
+    @Test("boot recovery turns a non-terminal dictation into a failed, retryable item")
+    func recoveryHandlesDictationLikeAnyOtherItem() throws {
+        let item = try store.create(mode: .dictation)
+        _ = try store.markQueued(item.id, duration: 1)
+        _ = try store.markTranscribing(item.id)
+
+        let recovered = try store.recoverOrphans()
+        #expect(recovered.count == 1)
+        #expect(recovered[0].meta.state == .failed)
+        #expect(recovered[0].meta.mode == .dictation)  // the mode survives the off-ramp
+        #expect(recovered[0].meta.error?.stage == .transcription)
+        #expect(recovered[0].meta.error?.reason == .interrupted)
+        #expect(recovered[0].isRetryable)
+        #expect(!recovered[0].isReprocessable)
+    }
+
+    @Test("the store refuses to reprocess a dictation, keeping its transcript")
+    func dictationCannotReprocess() throws {
+        let item = try store.create(mode: .dictation)
+        _ = try store.markQueued(item.id, duration: 0.7)
+        _ = try store.markTranscribing(item.id)
+        try store.write(Data("mp3".utf8), to: ItemFile.audio, for: item.id)
+        try store.write(Data("manda o commit".utf8), to: ItemFile.transcript, for: item.id)
+        _ = try store.markTranscribed(item.id)
+
+        #expect(throws: StoreError.reprocessUnavailable(id: item.id, mode: .dictation)) {
+            _ = try store.requeueForReprocess(item.id)
+        }
+        // The refusal comes before the destruction: reprocess drops derived artifacts,
+        // and for a dictation the transcript *is* the output, not a derived draft.
+        #expect(store.hasContent(ItemFile.transcript, for: item.id))
+        #expect(try store.meta(for: item.id).state == .transcribed)
+    }
+
+    @Test("a fresh meta.json is written at the current schema version")
+    func freshMetaCarriesCurrentSchemaVersion() throws {
+        let item = try store.create()
+        #expect(try store.meta(for: item.id).schemaVersion == 2)
+    }
+
+    @Test("a version-1 item upgrades its schema version the first time it transitions")
+    func legacyMetaUpgradesOnWrite() throws {
+        // The seam only works if the version tracks the bytes: once a write adds `mode`,
+        // the file is the new shape and must say so, or v1 and v2 become indistinguishable.
+        let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        let dir = root.appendingPathComponent(id, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let legacy = """
+            {
+              "created" : "2023-11-14T22:13:20.000Z",
+              "schemaVersion" : 1,
+              "state" : "transcribing",
+              "transitions" : { "transcribing" : "2023-11-14T22:13:30.000Z" }
+            }
+            """
+        try Data(legacy.utf8).write(to: dir.appendingPathComponent(ItemFile.meta))
+        #expect(try store.meta(for: id).schemaVersion == 1)  // untouched on read
+
+        _ = try store.markOrganizing(id)
+
+        let upgraded = try store.meta(for: id)
+        #expect(upgraded.schemaVersion == 2)
+        #expect(upgraded.mode == .braindump)  // and the default it upgraded to is the right one
+    }
+
+    @Test("a dictation retries back onto the serial lane, keeping its mode")
+    func dictationRequeuesForRetry() throws {
+        let item = try store.create(mode: .dictation)
+        _ = try store.markQueued(item.id, duration: 0.8)
+        _ = try store.markTranscribing(item.id)
+        _ = try store.fail(item.id, stage: .transcription, reason: .cliError, detail: "boom")
+
+        let meta = try store.requeueForRetry(item.id)
+        #expect(meta.state == .queued)
+        #expect(meta.mode == .dictation)
+        #expect(meta.error == nil)
+        #expect(meta.duration == 0.8)
+    }
+
     @Test("hasContent reports whether a stage artifact is on disk")
     func hasContentDetectsArtifacts() throws {
         let item = try store.create()
