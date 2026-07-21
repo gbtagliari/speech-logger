@@ -27,3 +27,9 @@ The five canonical triage roles use their default label strings. See `docs/agent
 ### Domain docs
 
 Single-context: one `CONTEXT.md` and one `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Handoffs
+
+Session handoff documents go in `.scratch/handoffs/`, named `YYYY-MM-DD-<slug>.md` — not in
+the OS temp directory. `.scratch/` is gitignored, so they stay local and out of the repo
+while remaining next to the work they describe.
