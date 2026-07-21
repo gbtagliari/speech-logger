@@ -1,22 +1,5 @@
 import Foundation
 
-/// What a finished recording produced: the temp wav plus the two measurements the
-/// dual guard needs. The wav is deleted once the mp3 exists.
-public struct RecordingCapture: Sendable, Equatable {
-    /// The native wav streamed to a temp file during capture.
-    public let wav: URL
-    /// Recording length in seconds.
-    public let duration: TimeInterval
-    /// Peak sample amplitude seen (0…1), for the energy floor.
-    public let peak: Float
-
-    public init(wav: URL, duration: TimeInterval, peak: Float) {
-        self.wav = wav
-        self.duration = duration
-        self.peak = peak
-    }
-}
-
 /// The microphone capture seam. The concrete implementation (AVAudioEngine) lives
 /// in the app target; the coordinator depends only on this so its orchestration is
 /// testable without hardware.
@@ -163,13 +146,14 @@ public protocol AudioEncoding: Sendable {
     private func process(id: String, capture: RecordingCapture) async {
         defer { try? FileManager.default.removeItem(at: capture.wav) }
 
-        switch guardCheck.evaluate(duration: capture.duration, peak: capture.peak) {
-        case .discardTooShort:
-            // An accidental tap: it never becomes a visible log item.
+        switch guardCheck.evaluate(duration: capture.duration, windowEnergies: capture.windowEnergies) {
+        case .discardTooShort, .discardSilent:
+            // Nothing was said, or nothing was meant: either way it never becomes a
+            // visible log item. A recording with no speech in it leaves nothing
+            // behind, however long it ran (#46) — a `failed` line for an accident
+            // you already noticed is litter, and duration cannot tell that accident
+            // from a dead microphone, which #45 detects directly instead.
             try? store.discard(id)
-        case .rejectSilent:
-            // Long enough but silent: fail cleanly rather than hallucinate.
-            _ = try? store.fail(id, stage: .recording, reason: .noSpeech, detail: "silent recording")
         case .accept:
             do {
                 let mp3 = try store.contentURL(of: ItemFile.audio, for: id)

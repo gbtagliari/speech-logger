@@ -10,7 +10,8 @@ private enum StubError: Error { case micDenied, encodeFailed }
 @MainActor private final class StubRecorder: AudioRecording {
     var throwOnStart = false
     var captureDuration: TimeInterval = 8.0
-    var capturePeak: Float = 0.4
+    /// Window energies the guard will read. Default: sustained speech.
+    var captureEnergies: [Float] = Array(repeating: 0.09, count: 400)
     private(set) var startCount = 0
     private(set) var stopCount = 0
     private(set) var lastWav: URL?
@@ -30,7 +31,7 @@ private enum StubError: Error { case micDenied, encodeFailed }
         let wav = currentWav!
         currentWav = nil
         lastWav = wav
-        return RecordingCapture(wav: wav, duration: captureDuration, peak: capturePeak)
+        return RecordingCapture(wav: wav, duration: captureDuration, windowEnergies: captureEnergies)
     }
 }
 
@@ -137,7 +138,6 @@ private final class Clock: @unchecked Sendable {
         defer { cleanup() }
         let coordinator = makeCoordinator()
         recorder.captureDuration = 8.0
-        recorder.capturePeak = 0.4
         coordinator.start()
         await coordinator.stop()
 
@@ -159,7 +159,6 @@ private final class Clock: @unchecked Sendable {
         var queued: [String] = []
         coordinator.onQueued = { queued.append($0) }
         recorder.captureDuration = 8.0
-        recorder.capturePeak = 0.4
         coordinator.start()
         await coordinator.stop()
 
@@ -167,7 +166,7 @@ private final class Clock: @unchecked Sendable {
         #expect(queued == [items[0].id])
     }
 
-    @Test("a discarded or failed recording never hands off to the lane")
+    @Test("a discarded recording never hands off to the lane")
     func nonAcceptDoesNotFireOnQueued() async throws {
         defer { cleanup() }
         let coordinator = makeCoordinator()
@@ -175,12 +174,11 @@ private final class Clock: @unchecked Sendable {
         coordinator.onQueued = { queued.append($0) }
         // Too short: discarded, no handoff.
         recorder.captureDuration = 0.1
-        recorder.capturePeak = 0.4
         coordinator.start()
         await coordinator.stop()
-        // Long but silent: failed, no handoff.
+        // Long but silent: discarded too, no handoff.
         recorder.captureDuration = 8.0
-        recorder.capturePeak = 0.0
+        recorder.captureEnergies = Array(repeating: 0.0, count: 400)
         coordinator.start()
         await coordinator.stop()
 
@@ -212,27 +210,42 @@ private final class Clock: @unchecked Sendable {
         defer { cleanup() }
         let coordinator = makeCoordinator()
         recorder.captureDuration = 0.2
-        recorder.capturePeak = 0.9
         coordinator.start()
         await coordinator.stop()
         #expect(try store.list().isEmpty)
         #expect(!FileManager.default.fileExists(atPath: recorder.lastWav!.path))
     }
 
-    @Test("a long-but-silent recording fails no_speech at the recording stage, not retryable")
-    func silentFailsNoSpeech() async throws {
+    @Test("a silent recording leaves nothing behind, however long it ran")
+    func silentDiscardedAtAnyDuration() async throws {
         defer { cleanup() }
+        // 5 minutes of silence used to become a `failed` item, which is litter: an
+        // accidental double-tap you noticed and stopped is not an error worth a line
+        // in the log (#46). The dead microphone is detected directly instead (#45).
+        for duration in [2.0, 300.0] {
+            let coordinator = makeCoordinator()
+            recorder.captureDuration = duration
+            recorder.captureEnergies = Array(repeating: 0.0004, count: Int(duration / 0.02))
+            coordinator.start()
+            await coordinator.stop()
+            #expect(try store.list().isEmpty)
+            #expect(!FileManager.default.fileExists(atPath: recorder.lastWav!.path))
+        }
+    }
+
+    @Test("a recording that is silent apart from one transient spike is discarded")
+    func singleSpikeDiscarded() async throws {
+        defer { cleanup() }
+        // The key click of the double-tap itself. A running peak would have carried
+        // this into transcription and come back a hallucination.
         let coordinator = makeCoordinator()
-        recorder.captureDuration = 12.0
-        recorder.capturePeak = 0.001
+        var energies = Array(repeating: Float(0.0004), count: 400)
+        energies[120] = 0.4
+        recorder.captureDuration = 8.0
+        recorder.captureEnergies = energies
         coordinator.start()
         await coordinator.stop()
-        let items = try store.list()
-        #expect(items.count == 1)
-        #expect(items[0].state == .failed)
-        #expect(items[0].meta.error?.reason == .noSpeech)
-        #expect(items[0].meta.error?.stage == .recording)
-        #expect(items[0].isRetryable == false)
+        #expect(try store.list().isEmpty)
     }
 
     // MARK: - Encode failure
