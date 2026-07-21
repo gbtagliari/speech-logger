@@ -1,6 +1,6 @@
 # speech-logger
 
-_Working title. The name is an open question, not a decision (see `PRD.md`)._
+_Working title. The name is an open question, not a decision._
 
 A macOS menubar app that turns speech into organized text.
 
@@ -8,7 +8,12 @@ Press a hotkey, talk for as long as you want, press it again. The app records, t
 and reorganizes the text for readability **without changing its meaning**. The result lands in
 a log; click an entry and its text is on your clipboard.
 
-It is not a dictation tool. Nothing is typed at the cursor, and the pipeline is asynchronous.
+That is **braindump** mode: nothing is typed at the cursor and the pipeline is asynchronous, so you
+speak, go back to work, and collect the text when it is ready.
+
+A second mode, **dictation**, is specified but not yet built: hold the same hotkey instead of releasing
+it, and the raw transcript is pasted where your cursor already is, with no LLM in the way. It is for
+the other kind of speech — a short throwaway instruction you read and fix in two seconds.
 
 ## Why it exists
 
@@ -18,13 +23,14 @@ the point. The goal here is to strip the fillers, false starts and repetition, a
 and reorder into something readable, while every idea, every hedge, and every modal ("cannot"
 never becomes "should not") survives intact.
 
-That fidelity contract is the whole product. It is specified in `PRD.md` and enforced by an
-acceptance set of real recordings.
+That fidelity contract is the whole product. Delivering it is what decided the two-pass
+architecture (ADR-0001), and it is enforced by an acceptance set of real recordings.
 
 ## Status
 
-Early implementation. `PRD.md` and `SPEC.md` are approved; the project scaffold builds and
-launches as a menubar app (issue #14). The pipeline is not built yet.
+Early implementation. The project scaffold builds and launches as a menubar app (issue #14);
+the pipeline is not built yet. Scope lives in the GitHub issues, the vocabulary in
+`CONTEXT.md`, and the load-bearing decisions in `docs/adr/`.
 
 ## Development
 
