@@ -193,16 +193,19 @@ struct HotkeyDetectorTests {
         #expect(patient.handle(keyCode: Self.rOptKeyCode, flags: Self.allReleased, now: 0.50, isRecording: true) == nil)
     }
 
-    @Test("recording starts on tap 2 in both modes, before the mode is known")
-    func recordingStartsOnTapTwoInBothModes() {
-        // The same three events open the mic; what the fourth one is decides the
-        // label. Nothing is delayed and nothing is discarded waiting for T.
-        for release in [0.05, 5.00] {
-            var detector = HotkeyDetector(window: 0.30, holdThreshold: 0.25)
-            #expect(startsRecording(&detector, at: 0.00) == .start)
-            _ = detector.handle(
-                keyCode: Self.rOptKeyCode, flags: Self.allReleased, now: 0.20 + release, isRecording: true)
-        }
+    @Test(
+        "recording starts on tap 2 in both modes, before the mode is known",
+        arguments: [(0.05, HotkeyGesture?.none), (5.00, .stop(.dictation))])
+    func recordingStartsOnTapTwoInBothModes(heldFor: TimeInterval, thenEnds: HotkeyGesture?) {
+        // The same three events open the mic in both modes; only the fourth — how long
+        // tap 2 stayed down — separates them. What waits for `T` is the label, so the
+        // identical `.start` has to come out first whichever mode this turns into.
+        var detector = HotkeyDetector(window: 0.30, holdThreshold: 0.25)
+        #expect(startsRecording(&detector, at: 0.00) == .start)
+        #expect(
+            detector.handle(
+                keyCode: Self.rOptKeyCode, flags: Self.allReleased, now: 0.20 + heldFor, isRecording: true)
+                == thenEnds)
     }
 
     // MARK: - A hold is not a gesture on its own

@@ -102,7 +102,7 @@ public struct ItemStore: Sendable {
         _ id: String, duration: TimeInterval, mode: ItemMode? = nil
     ) throws(StoreError) -> ItemMeta {
         let advanced = try meta(for: id).advancing(to: .queued, at: now(), duration: duration)
-        let next = mode.map { advanced.labelled(as: $0) } ?? advanced
+        let next = mode.map { advanced.labeled(as: $0) } ?? advanced
         return try persist(next, for: id)
     }
 

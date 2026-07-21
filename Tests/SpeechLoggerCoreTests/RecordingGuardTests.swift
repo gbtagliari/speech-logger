@@ -103,8 +103,17 @@ struct RecordingGuardTests {
         #expect(guardCheck.evaluate(mode: .braindump, duration: 0.4, windowEnergies: utterance) == .discardTooShort)
     }
 
+    @Test("the dictation floor stays above the mode threshold, whatever either is tuned to")
+    func dictationFloorClearsTheModeThreshold() {
+        // Two constants in two types, tuned independently on-device, with a
+        // load-bearing ordering between them: below `T` the floor would accept every
+        // hold that was long enough to be *labeled* a dictation. Asserted here so a
+        // tuning that opens that hole fails before it ships, not in the field.
+        #expect(RecordingGuard().dictationMinimumDuration > HotkeyDetector().holdThreshold)
+    }
+
     @Test("a hold that crossed T by accident still dies as too short")
-    func dictationFloorSitsAboveTheModeThreshold() {
+    func dictationFloorRejectsABarelyCrossedHold() {
         // 350 ms is just over `T` (250 ms), so the gap between "held long enough to be
         // labeled a dictation" and "held long enough to be one" is not a hole.
         let loud = speech(loud: 8, in: 15)

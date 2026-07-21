@@ -50,7 +50,12 @@ public struct HotkeyDetector: Sendable {
     /// down at it is a dictation. Injectable exactly like `window`, for on-device
     /// tuning — 250 ms sits above a deliberate double-tap's second release and below
     /// the shortest hold anyone means as a hold.
-    private let holdThreshold: TimeInterval
+    ///
+    /// Readable because it is half of an invariant it does not own: the guard's
+    /// dictation duration floor must stay above it, or a hold that only just became a
+    /// dictation would be accepted as one. The two are tuned independently, so the
+    /// ordering is asserted rather than left to a comment.
+    public let holdThreshold: TimeInterval
 
     /// Timestamp of the last accepted first tap. Seeded far in the past so the
     /// very first tap can never satisfy the window on its own.

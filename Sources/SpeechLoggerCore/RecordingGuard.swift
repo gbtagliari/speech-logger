@@ -86,7 +86,7 @@ public struct RecordingGuard: Sendable {
     }
 
     /// The floor the gesture's mode earns.
-    public func minimumDuration(for mode: ItemMode) -> TimeInterval {
+    private func minimumDuration(for mode: ItemMode) -> TimeInterval {
         switch mode {
         case .braindump: return braindumpMinimumDuration
         case .dictation: return dictationMinimumDuration
