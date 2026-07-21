@@ -3,7 +3,8 @@ import Foundation
 /// The single serial FIFO transcription lane (ADR-0006). Items that finished
 /// recording wait in `queued`; this lane picks them up one at a time, runs
 /// `mlx_whisper`, and writes the raw transcript — `queued` → `transcribing` →
-/// transcript file on disk. Serializing costs ~20% over running two at once and
+/// transcript file on disk. Both modes share it, and it is where their paths fork:
+/// a braindump hands off to organization, a dictation rests at `transcribed` (#41). Serializing costs ~20% over running two at once and
 /// removes all GPU contention, so it is the deliberate model, not a limitation
 /// (`docs/research/mlx-whisper-shell-out-contract.md`).
 ///
@@ -18,8 +19,11 @@ public actor TranscriptionLane {
     /// Fired after every state-affecting step, so the menubar can recompute its glyph.
     private let onStateChange: (@Sendable () -> Void)?
     /// The handoff seam: fired with the item id once its transcript is written. The
-    /// item is still `transcribing` — organization (a later ticket) is the consumer
-    /// that advances it to `organizing`. Absent that consumer, the item rests here.
+    /// item is still `transcribing` — organization is the consumer that advances it to
+    /// `organizing`. Absent that consumer, the item rests here.
+    ///
+    /// **Braindumps only** (#41). A dictation has no organization stage, so the lane
+    /// advances it to `transcribed` itself and never fires this.
     private let onTranscribed: (@Sendable (String) -> Void)?
 
     /// The FIFO backlog. Only touched on the actor, so no lock is needed.
@@ -111,17 +115,31 @@ public actor TranscriptionLane {
 
     private func process(_ id: String) async {
         // Only a still-`queued` item runs. One that was cancelled/failed/deleted
-        // between enqueue and pickup is skipped, never revived.
-        guard (try? store.meta(for: id))?.state == .queued else { return }
+        // between enqueue and pickup is skipped, never revived. The mode is read here,
+        // at pickup, and it cannot change under a running item.
+        guard let queued = try? store.meta(for: id), queued.state == .queued else { return }
         do {
             _ = try store.markTranscribing(id)
             onStateChange?()
             let audio = try store.contentURL(of: ItemFile.audio, for: id)
             let transcript = try store.contentURL(of: ItemFile.transcript, for: id)
             try await transcriber.transcribe(audio: audio, to: transcript)
-            // Success: the transcript is on disk and the item is `transcribing`.
-            // Hand off to organization rather than advancing here.
-            onTranscribed?(id)
+            // Success: the transcript is on disk and the item is `transcribing`. Where it
+            // goes from here is the whole structural difference between the modes, and
+            // this is the fork (#41): a dictation is *done* — the transcript is its
+            // output — so it advances to its own terminal and rests. A braindump hands
+            // off to organization instead of advancing, and the consumer moves it on.
+            //
+            // Not firing `onTranscribed` for a dictation is what makes "zero LLM
+            // invocations" structural rather than a promise: this is the only seam that
+            // reaches the organization lane, so an unfired handoff cannot run a pass.
+            switch queued.mode {
+            case .dictation:
+                _ = try store.markTranscribed(id)
+                onStateChange?()
+            case .braindump:
+                onTranscribed?(id)
+            }
         } catch {
             // A cancelled task (stop / quit) killed `mlx_whisper`, surfacing as a
             // transcription/store error. Record `cancelled`, not `failed` — unless

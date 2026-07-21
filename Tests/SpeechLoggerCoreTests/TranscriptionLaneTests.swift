@@ -33,6 +33,55 @@ struct TranscriptionLaneTests {
         #expect(collector.stateChanges >= 1)
     }
 
+    // MARK: - Mode routing (#41)
+
+    @Test("a dictation rests at transcribed and never hands off to organization")
+    func dictationRestsAtTranscribed() async throws {
+        let store = try makeStore()
+        let id = try queuedItem(in: store, mode: .dictation)
+        let collector = Collector()
+        let lane = TranscriptionLane(
+            store: store,
+            transcriber: FakeTranscriber(log: CallLog(), writesOutput: true),
+            onStateChange: { collector.bumpState() },
+            onTranscribed: { collector.addTranscribed($0) })
+
+        await lane.enqueue(id)
+        await lane.waitUntilIdle()
+
+        // The transcript is the output: the item is terminal, with no organization to run.
+        #expect(try store.meta(for: id).state == .transcribed)
+        #expect(try store.read(file: ItemFile.transcript, for: id) != nil)
+        // The handoff never fires, which is the mode's defining property: the seam that
+        // reaches the LLM is not crossed, so zero passes can run.
+        #expect(collector.transcribed.isEmpty)
+    }
+
+    @Test("a retried dictation reaches transcribed, not a second failure")
+    func retriedDictationReachesTranscribed() async throws {
+        // The path the mode's retry actually takes: a dead dictation is requeued onto
+        // this same lane, so it must land on the dictation terminal the second time too.
+        let store = try makeStore()
+        let id = try queuedItem(in: store, mode: .dictation)
+        _ = try store.markTranscribing(id)
+        _ = try store.fail(id, stage: .transcription, reason: .cliError, detail: "boom")
+        _ = try store.requeueForRetry(id)
+
+        let collector = Collector()
+        let lane = TranscriptionLane(
+            store: store,
+            transcriber: FakeTranscriber(log: CallLog(), writesOutput: true),
+            onStateChange: { collector.bumpState() },
+            onTranscribed: { collector.addTranscribed($0) })
+
+        await lane.enqueue(id)
+        await lane.waitUntilIdle()
+
+        #expect(try store.meta(for: id).state == .transcribed)
+        #expect(try store.meta(for: id).error == nil)
+        #expect(collector.transcribed.isEmpty)
+    }
+
     // MARK: - Serial FIFO
 
     @Test("three items transcribe in arrival order, one at a time (never two at once)")
@@ -192,8 +241,8 @@ struct TranscriptionLaneTests {
     }
 
     /// Create an item and move it to `queued`, the state the lane consumes.
-    private func queuedItem(in store: ItemStore) throws -> String {
-        let item = try store.create()
+    private func queuedItem(in store: ItemStore, mode: ItemMode = .braindump) throws -> String {
+        let item = try store.create(mode: mode)
         _ = try store.markQueued(item.id, duration: 1.0)
         return item.id
     }
