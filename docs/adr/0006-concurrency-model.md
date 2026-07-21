@@ -26,6 +26,12 @@ Rules that fall out:
 
 - **The hotkey never refuses a new recording.** Its behavior depends only on whether you are currently
   recording (stop) or not (start). The transcription queue is unbounded.
+
+  **Amended by #45.** One refusal now exists, and only one: a microphone the device itself reports as
+  unusable. It is a **device fact, not pipeline pressure** — no amount of work in flight still makes
+  the app say no, which is what this rule was written to guarantee. It is the inverse of what the rule
+  protects: recording into a dead mic is what would cost a thought. Stopping is never refused, so
+  "recording wins the key" is untouched; the condition applies from idle only.
 - **The menubar icon is a strict priority ladder**, one state wins the glyph:
   `recording` > `failed` > `processing` (= `queued`/`transcribing`/`organizing`) > `idle`.
 - **Quit never blocks.** Graceful quit marks in-flight processing items `cancelled` (resume from stage

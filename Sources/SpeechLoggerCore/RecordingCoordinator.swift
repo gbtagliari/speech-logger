@@ -34,9 +34,13 @@ public protocol AudioEncoding: Sendable {
 }
 
 /// Orchestrates one recording gesture end to end: hotkey toggle → capture → dual
-/// guard → encode → item lands `queued` (ADR-0006). Recording is exclusive and the
-/// hotkey never refuses a new one — the toggle's behavior depends only on whether the
-/// mic is currently live.
+/// guard → encode → item lands `queued` (ADR-0006). Recording is exclusive, and the
+/// toggle's behavior depends only on whether the mic is currently live: a queued or
+/// processing item never holds up the next recording.
+///
+/// One thing does refuse a new recording, and only one: a microphone the device itself
+/// reports as unusable (#45). Nothing else — a missing binary, a denied notification, a
+/// full pipeline — ever costs a thought.
 ///
 /// Foundation-only and `@MainActor`, with the hardware seams injected, so the whole
 /// flow is unit-testable against a real store on a temp directory.
@@ -45,6 +49,9 @@ public protocol AudioEncoding: Sendable {
     private let recorder: any AudioRecording
     private let encoder: any AudioEncoding
     private let guardCheck: RecordingGuard
+    /// The device query, run at the start of every recording. Injected so an unusable
+    /// microphone is testable without one, and so this target stays free of AVFoundation.
+    private let microphone: @MainActor () -> MicrophoneState
 
     /// The mic is live. Drives the `recording` glyph and the running clock.
     public private(set) var isRecording = false
@@ -59,20 +66,30 @@ public protocol AudioEncoding: Sendable {
     /// Called when the mic fails to start (e.g. access denied), so the app can
     /// surface it. The item is discarded; the app stays idle.
     public var onRecorderStartFailed: (@MainActor (Error) -> Void)?
+    /// Called when an unusable microphone refuses a recording, with the device problem
+    /// that refused it. Nothing was created and nothing was captured; the app stays
+    /// idle and the hotkey keeps working.
+    public var onRecordingRefused: (@MainActor (MicrophoneState) -> Void)?
 
     public init(
         store: ItemStore,
         recorder: any AudioRecording,
         encoder: any AudioEncoding,
-        guardCheck: RecordingGuard = RecordingGuard()
+        guardCheck: RecordingGuard = RecordingGuard(),
+        // No default: this is a hardware seam like the recorder and the encoder, and a
+        // caller that forgot it would silently record with the check disabled.
+        microphone: @escaping @MainActor () -> MicrophoneState
     ) {
         self.store = store
         self.recorder = recorder
         self.encoder = encoder
         self.guardCheck = guardCheck
+        self.microphone = microphone
     }
 
-    /// The hotkey. Start if idle, stop if recording — nothing else. Always accepted.
+    /// The hotkey. Start if idle, stop if recording — nothing else. Never blocked: a
+    /// press always reaches here, and the only thing that can turn it down is an
+    /// unusable microphone (see `start`).
     public func toggle() {
         if isRecording {
             Task { await stop() }
@@ -81,10 +98,21 @@ public protocol AudioEncoding: Sendable {
         }
     }
 
-    /// Start a recording: create the item at `recording` and open the mic. A second
-    /// call while already recording is a no-op (exclusive recording).
+    /// Start a recording: check the microphone, create the item at `recording`, open
+    /// the mic. A second call while already recording is a no-op (exclusive recording).
+    ///
+    /// The device is queried here and not only at panel-open, because mute state
+    /// changes in between and the start of a recording is the only instant that
+    /// matters. An unusable device refuses: capturing while knowing nothing will arrive
+    /// is manufacturing the loss on purpose, and the refusal costs a moment where the
+    /// capture would cost a whole braindump.
     public func start() {
         guard !isRecording else { return }
+        let microphoneState = microphone()
+        guard microphoneState.isUsable else {
+            onRecordingRefused?(microphoneState)
+            return
+        }
         let item: Item
         do {
             item = try store.create()

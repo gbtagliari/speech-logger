@@ -238,7 +238,8 @@ import Testing
                 transcriber: SwitchingTranscriber(),
                 onTranscribed: { id in Task { await organization.organize(id) } })
             recording = RecordingCoordinator(
-                store: store, recorder: StubRecorder(), encoder: StubEncoder())
+                store: store, recorder: StubRecorder(), encoder: StubEncoder(),
+                microphone: { .usable })  // these tests are about control, not the device
             controller = PipelineController(
                 store: store, recording: recording,
                 transcription: transcription,

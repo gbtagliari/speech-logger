@@ -15,6 +15,19 @@ public enum PreflightCheck: String, Sendable, Equatable, CaseIterable {
     case whisperModel
     /// Input Monitoring is granted, so the hotkey can hear (ADR-0004).
     case inputMonitoring
+    /// The microphone grant is given, so the mic can open at all.
+    case microphonePermission
+    /// An input device exists to record from.
+    case microphoneDevice
+    /// The input device is unmuted and gained, so it would actually capture something.
+    case microphoneLevel
+
+    /// The rows that read one `MicrophoneState`. They are separate checks because each
+    /// names a different thing to fix; they can never fail together, since the state
+    /// picks exactly one of them (`MicrophoneState.failingCheck`).
+    public static let microphoneChecks: [PreflightCheck] = [
+        .microphonePermission, .microphoneDevice, .microphoneLevel,
+    ]
 
     /// The pt-BR headline shown in the panel when this check fails.
     public var title: String {
@@ -25,10 +38,17 @@ public enum PreflightCheck: String, Sendable, Equatable, CaseIterable {
         case .claudeLogin: return "claude não está logado"
         case .whisperModel: return "modelo do Whisper não baixado"
         case .inputMonitoring: return "Monitoramento de Entrada desativado"
+        case .microphonePermission: return "sem acesso ao microfone"
+        case .microphoneDevice: return "nenhum microfone conectado"
+        case .microphoneLevel: return "microfone mudo ou sem ganho"
         }
     }
 
     /// The pt-BR line under the headline: what breaks, and the way out.
+    ///
+    /// The three microphone lines name the *device* problem, never "nada foi ouvido" —
+    /// the point of querying the device is to say what to fix instead of reporting an
+    /// absence after the fact.
     public var detail: String {
         switch self {
         case .mlxWhisper: return "Sem ele não há transcrição. Instale com `brew install mlx-whisper`."
@@ -37,18 +57,49 @@ public enum PreflightCheck: String, Sendable, Equatable, CaseIterable {
         case .claudeLogin: return "A organização falha até você rodar `claude login` no terminal."
         case .whisperModel: return "São ~1,5 GB, uma vez só. Depois a transcrição roda offline."
         case .inputMonitoring: return "O atalho fica surdo até você permitir."
+        case .microphonePermission:
+            return "A gravação é recusada até você liberar o microfone para o app."
+        case .microphoneDevice:
+            return "Não há entrada de áudio para gravar. Conecte um microfone."
+        case .microphoneLevel:
+            return "O aparelho está aí, mas mudo ou com ganho zero: não captaria nada. "
+                + "Ajuste o volume de entrada."
         }
     }
 
     /// What the panel can offer to fix, or nil when the check is report-only.
     ///
-    /// Only two of the six are ours to fix. Installing a binary or logging into
-    /// `claude` is the user's terminal, not something the app runs behind their back.
+    /// Only what is ours to fix: the download we run, and the Settings pane that owns
+    /// the problem. Installing a binary, logging into `claude` or plugging in a
+    /// microphone is the user's terminal or the user's desk, not something a button does.
+    ///
+    /// The Sound pane on `microphoneLevel` goes past what #45 asked for (it required
+    /// only that the row *name* what to fix). Kept deliberately, because the rule above
+    /// is "the pane that owns the problem", and dropping this one would apply that rule
+    /// to two permission rows and then stop for no reason a reader could reconstruct.
     public var fix: PreflightFix? {
         switch self {
         case .whisperModel: return .downloadWhisperModel
         case .inputMonitoring: return .openInputMonitoringSettings
-        case .mlxWhisper, .ffmpeg, .claude, .claudeLogin: return nil
+        case .microphonePermission: return .openMicrophoneSettings
+        case .microphoneLevel: return .openSoundSettings
+        case .mlxWhisper, .ffmpeg, .claude, .claudeLogin, .microphoneDevice: return nil
+        }
+    }
+}
+
+extension MicrophoneState {
+    /// The one check this device problem fails, or nil when the microphone is usable.
+    ///
+    /// The single place the device states and the panel's rows are married, so the two
+    /// cannot drift: an exhaustive switch means a new state has to name the row that
+    /// reports it, rather than silently reporting nothing while recordings are refused.
+    public var failingCheck: PreflightCheck? {
+        switch self {
+        case .usable: return nil
+        case .permissionDenied: return .microphonePermission
+        case .noDevice: return .microphoneDevice
+        case .silenced: return .microphoneLevel
         }
     }
 }
@@ -57,6 +108,10 @@ public enum PreflightCheck: String, Sendable, Equatable, CaseIterable {
 public enum PreflightFix: Sendable, Equatable {
     /// Deep-link to the Input Monitoring pane in System Settings.
     case openInputMonitoringSettings
+    /// Deep-link to the Microphone privacy pane in System Settings.
+    case openMicrophoneSettings
+    /// Deep-link to the Sound pane, where the input device and its volume live.
+    case openSoundSettings
     /// Run the model download (`mlx_whisper` without `HF_HUB_OFFLINE=1`).
     case downloadWhisperModel
 
@@ -65,6 +120,8 @@ public enum PreflightFix: Sendable, Equatable {
     public var title: String {
         switch self {
         case .openInputMonitoringSettings: return "Abrir Ajustes do Sistema…"
+        case .openMicrophoneSettings: return "Abrir Ajustes do Sistema…"
+        case .openSoundSettings: return "Abrir Ajustes de Som…"
         case .downloadWhisperModel: return "Baixar modelo"
         }
     }
@@ -88,6 +145,11 @@ public struct PreflightResult: Sendable, Equatable, Identifiable {
 /// It is a report, never a gate. Nothing here blocks the hotkey — a prerequisite that
 /// is missing at capture time lands the recording as a retryable `failed`/`missing_binary`
 /// item (`TranscriptionLane`, `Organizer`), so a thought is never lost to a dependency.
+///
+/// The microphone rows are the one place worth being precise about: an unusable device
+/// does refuse a recording, but the refusal is `RecordingCoordinator`'s, taken from its
+/// own query at the instant the key is pressed. This report is still only a report —
+/// it is read at panel-open, and by then the device may have changed.
 public struct PreflightReport: Sendable, Equatable {
     public let results: [PreflightResult]
 
@@ -151,21 +213,26 @@ public struct PreflightConfiguration: Sendable {
 /// panel-open, which is also how a mid-session grant or a finished model download
 /// stops being reported.
 public enum Preflight {
-    /// Run every check. Cheap enough for the main actor: five `stat`s and a `Bool`.
+    /// Run every check. Cheap enough for the main actor: five `stat`s and two queries
+    /// answered by the caller.
     ///
     /// - Parameters:
     ///   - configuration: where to look.
     ///   - inputMonitoringGranted: `CGPreflightListenEventAccess()`, never the Settings
     ///     toggle — the toggle lies after a DR-invalidating rebuild (ADR-0005). Passed
     ///     in because it is a CoreGraphics call and this target is pure.
+    ///   - microphone: the device as it reports itself (AVFoundation + CoreAudio),
+    ///     injected for the same reason. A dead mic is read from the hardware, never
+    ///     inferred from a recording that came back silent.
     public static func run(
         configuration: PreflightConfiguration = .defaults,
-        inputMonitoringGranted: Bool
+        inputMonitoringGranted: Bool,
+        microphone: MicrophoneState
     ) -> PreflightReport {
         // Presence only, never executability: a plain `stat` check. A binary that is
         // there but unusable dies as `missing_binary` at capture time, retryable.
         let exists = { (path: String) in FileManager.default.fileExists(atPath: path) }
-        return PreflightReport(results: [
+        let results = [
             PreflightResult(check: .mlxWhisper, isSatisfied: exists(configuration.paths.mlxWhisper)),
             PreflightResult(check: .ffmpeg, isSatisfied: exists(configuration.paths.ffmpeg)),
             PreflightResult(check: .claude, isSatisfied: exists(configuration.paths.claude)),
@@ -173,6 +240,15 @@ public enum Preflight {
             PreflightResult(
                 check: .whisperModel, isSatisfied: configuration.cache.isCached(model: Transcriber.model)),
             PreflightResult(check: .inputMonitoring, isSatisfied: inputMonitoringGranted),
-        ])
+        ]
+        // One state, several rows: whichever device problem is there is the only one
+        // reported, so the banner names what to fix instead of listing everything a
+        // microphone could be wrong about. Derived from the state rather than compared
+        // row by row, so a new `MicrophoneState` case cannot end up refusing recordings
+        // while the panel shows nothing.
+        let microphoneResults = PreflightCheck.microphoneChecks.map {
+            PreflightResult(check: $0, isSatisfied: microphone.failingCheck != $0)
+        }
+        return PreflightReport(results: results + microphoneResults)
     }
 }
