@@ -1,7 +1,6 @@
 import Foundation
 
-/// The canonical state of a log item (CONTEXT.md, ADR-0003, ADR-0006). Supersedes
-/// the four-state table in `PRD.md` §5.
+/// The canonical state of a log item (CONTEXT.md, ADR-0003, ADR-0006).
 ///
 /// Happy path: `recording` -> `queued` -> `transcribing` -> `organizing` ->
 /// `organized`. `failed` and `cancelled` are terminal off-ramps.

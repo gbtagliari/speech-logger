@@ -4,7 +4,7 @@ import Foundation
 /// actually there. This is preflight's "Whisper model downloaded" check.
 ///
 /// It has to be a cache read, not a trial run: transcription ships with
-/// `HF_HUB_OFFLINE=1` so a dictation never stalls on the network, which means an
+/// `HF_HUB_OFFLINE=1` so a transcription never stalls on the network, which means an
 /// uncached model fails outright at capture time. The download is therefore a
 /// deliberate preflight step (`WhisperModelDownloader`), and this is how we know
 /// whether it is still owed (`docs/research/mlx-whisper-shell-out-contract.md`).
@@ -52,7 +52,7 @@ public struct WhisperModelCache: Sendable, Equatable {
     /// The gate is the weights file under the revision `refs/main` names, not the repo
     /// directory: an interrupted download leaves the tree in place without the weights,
     /// and calling that a hit would hand the user a green preflight and a first
-    /// dictation that dies on `HF_HUB_OFFLINE`.
+    /// transcription that dies on `HF_HUB_OFFLINE`.
     public func isCached(model: String) -> Bool {
         let root = directory(for: model)
         guard let revision = revision(in: root) else { return false }

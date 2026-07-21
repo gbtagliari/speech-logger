@@ -12,9 +12,9 @@ public enum WhisperModelDownloadError: Error, Equatable {
     case io(String)
 
     /// The pt-BR line the panel shows when the click did not work. Without it the
-    /// spinner would simply stop and leave the same banner behind, which is the silent
-    /// failure story 37 exists to prevent. The `detail` stays in the log: it is a
-    /// stderr tail, not something to read in a menubar popover.
+    /// spinner would simply stop and leave the same banner behind, a silent failure.
+    /// The `detail` stays in the log: it is a stderr tail, not something to read in a
+    /// menubar popover.
     public var message: String {
         switch self {
         case .launchFailed: return "Não deu pra executar o mlx_whisper. Confira a instalação."
@@ -25,10 +25,10 @@ public enum WhisperModelDownloadError: Error, Equatable {
 }
 
 /// The one thing preflight fixes: downloading the ~1.5 GB Whisper model, as a
-/// deliberate user-clicked step (SPEC "First-run preflight").
+/// deliberate user-clicked step.
 ///
-/// It is a normal `mlx_whisper` run with two differences from a dictation:
-///   1. **No `HF_HUB_OFFLINE=1`.** That variable is exactly what makes a dictation
+/// It is a normal `mlx_whisper` run with two differences from a transcription run:
+///   1. **No `HF_HUB_OFFLINE=1`.** That variable is exactly what makes a transcription
 ///      never stall on the network, and exactly what would make this a no-op. This is
 ///      the single run allowed to reach HuggingFace.
 ///   2. **The audio is throwaway silence.** The CLI needs a file to work on; the
@@ -36,7 +36,7 @@ public enum WhisperModelDownloadError: Error, Equatable {
 ///      product of this run, not the text.
 ///
 /// The argv is `Transcriber`'s, unchanged, so what lands in the cache is the model the
-/// dictation pins — a download of anything else would leave preflight red forever.
+/// pipeline pins — a download of anything else would leave preflight red forever.
 /// Success is the cache, never the exit code (`mlx_whisper` exits 0 on every failure).
 public struct WhisperModelDownloader: Sendable {
     private let mlxWhisper: String

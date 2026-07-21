@@ -3,11 +3,11 @@ import Testing
 
 @testable import SpeechLoggerCore
 
-/// The product's regression suite (issue #18, SPEC "Testing Decisions"): the four
-/// acceptance-set cases run through the **real** two-pass pipeline, each judged by the
-/// four fidelity checks (idea count, new-word diff, modal check, slip check). It is
-/// developer-run and offline — gated on `claude` + credentials + the recorded
-/// transcripts, so it never fails on a machine without the toolchain. This is where
+/// The product's regression suite (issue #18): the four acceptance-set cases run
+/// through the **real** two-pass pipeline, each judged by the four fidelity checks
+/// (idea count, new-word diff, modal check, slip check). It is developer-run and
+/// offline — gated on `claude` + credentials + the recorded transcripts, so it never
+/// fails on a machine without the toolchain. This is where
 /// prompt drift is caught: if a prompt edit makes a model summarize, insert a weighted
 /// word, downgrade a modal, or repair `se profissional`, a case here goes red.
 struct AcceptanceSetTests {

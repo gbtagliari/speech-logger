@@ -1,17 +1,17 @@
 import Foundation
 
 /// Why an organization pass failed. Structural only — the app never judges the
-/// fidelity contract at runtime (SPEC "Testing Decisions"); fluent-but-wrong output
-/// flows through to `organized` and the offline acceptance set catches drift. The
+/// fidelity contract at runtime; fluent-but-wrong output flows through to
+/// `organized` and the offline acceptance set catches drift. The
 /// `stage` (`pass1`/`pass2`) and `reason` map straight onto `ItemStore.fail`.
 public enum OrganizationError: Error, Equatable {
     case failed(stage: Stage, reason: FailureReason, detail: String)
 }
 
 /// The organization seam: the two LLM passes as pure functions of text
-/// (`(transcript, prompt) → text`), the highest-value seam in the pipeline
-/// (SPEC "Testing Decisions"). Split into the two passes so the lane can persist
-/// the annotated pass-1 pivot (`pass1.txt`) between them — retaining it even when
+/// (`(transcript, prompt) → text`), the highest-value seam in the pipeline. Split into
+/// the two passes so the lane can persist the annotated pass-1 pivot (`pass1.txt`)
+/// between them — retaining it even when
 /// pass 2 fails, which is what makes the two-pass contract auditable (ADR-0001).
 public protocol Organizing: Sendable {
     /// Pass 1 — annotate. Marks false starts, repetitions, superseded corrections,
@@ -41,7 +41,7 @@ extension Organizing {
 ///
 ///   - `--effort low` — unset, the CLI thinks its way through a mechanical task at
 ///     ~10× the latency and cost, with wild run-to-run nondeterminism. Mandatory.
-///   - `--safe-mode` — else `CLAUDE.md`/`MEMORY.md` leak into every dictation.
+///   - `--safe-mode` — else `CLAUDE.md`/`MEMORY.md` leak into every transcription run.
 ///   - `--output-format json` — the *only* safe failure signal. With `text`, an
 ///     error message prints to stdout where the rewritten text belongs.
 ///
@@ -68,8 +68,8 @@ public struct ClaudeOrganizer: Organizing {
     }
 
     /// The pinned `claude` argv for one pass. Built as an array (never a shell
-    /// string). The transcript is *not* here — it goes on stdin, keeping private
-    /// dictation out of `argv` (visible to `ps`) and letting the prompt be cached.
+    /// string). The transcript is *not* here — it goes on stdin, keeping the private
+    /// speech out of `argv` (visible to `ps`) and letting the prompt be cached.
     public static func arguments(systemPrompt: String) -> [String] {
         [
             "--print",
@@ -139,7 +139,7 @@ public struct ClaudeOrganizer: Organizing {
     /// result through `outcome`. Runs off the calling actor so a pass (network-bound,
     /// seconds long, and with no built-in timeout on a dead network) never blocks it,
     /// and is killed if the enclosing task is cancelled — the manual "stop" and the
-    /// graceful quit are the answer to that hang, not an app-imposed timeout (SPEC).
+    /// graceful quit are the answer to that hang, not an app-imposed timeout.
     private func run(prompt: String, input: String, stage: Stage) async throws(OrganizationError) -> String {
         let environment = Self.environment(base: ProcessInfo.processInfo.environment)
         let arguments = Self.arguments(systemPrompt: prompt)

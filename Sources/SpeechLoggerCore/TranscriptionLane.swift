@@ -61,9 +61,9 @@ public actor TranscriptionLane {
         await drainTask?.value
     }
 
-    /// Stop one item (the manual "stop processing" control, story 30). A still-`queued`
-    /// item is dropped from the backlog and marked `cancelled` directly (no process to
-    /// kill). The in-flight `transcribing` item is stopped by cancelling its task,
+    /// Stop one item (the manual "stop processing" control). A still-`queued` item is
+    /// dropped from the backlog and marked `cancelled` directly (no process to kill).
+    /// The in-flight `transcribing` item is stopped by cancelling its task,
     /// which terminates `mlx_whisper`; `process` then records the `cancelled` state.
     /// An id this lane does not own (already organizing, or gone) is a no-op — the
     /// controller also asks the organization lane, and the owner acts.

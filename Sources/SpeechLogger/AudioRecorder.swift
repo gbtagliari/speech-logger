@@ -3,9 +3,9 @@ import SpeechLoggerCore
 import os
 
 /// Captures the microphone to a native wav in a temp file via `AVAudioEngine`,
-/// streamed frame-by-frame so RAM stays O(1) regardless of length (SPEC "The
-/// pipeline"). The recorded wav feeds `ffmpeg`, which downmixes to mono/16 kHz —
-/// the app records native and does not resample itself.
+/// streamed frame-by-frame so RAM stays O(1) regardless of length. The recorded wav
+/// feeds `ffmpeg`, which downmixes to mono/16 kHz (ADR-0002) — the app records
+/// native and does not resample itself.
 ///
 /// While recording it accumulates the two measurements the dual guard needs: the
 /// peak sample amplitude and the frame count (for duration). The audio tap runs on

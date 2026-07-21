@@ -4,7 +4,7 @@ import Testing
 @testable import SpeechLoggerCore
 
 /// The one thing preflight fixes: the model download, a user-clicked `mlx_whisper`
-/// run *without* `HF_HUB_OFFLINE=1` (SPEC "First-run preflight").
+/// run *without* `HF_HUB_OFFLINE=1`.
 struct WhisperModelDownloaderTests {
     private func emptyHub() -> WhisperModelCache {
         WhisperModelCache(hub: HubFixture.temporaryURL())
@@ -19,7 +19,7 @@ struct WhisperModelDownloaderTests {
     // MARK: - The environment
 
     /// The whole point of the download run: transcription pins `HF_HUB_OFFLINE=1` so a
-    /// dictation never stalls on the network, and with it set the download cannot
+    /// transcription never stalls on the network, and with it set the download cannot
     /// happen. Inheriting it from the app's own env would make the fix a no-op.
     @Test("the download run drops HF_HUB_OFFLINE, even when inherited")
     func offlineIsDropped() {
@@ -69,8 +69,8 @@ struct WhisperModelDownloaderTests {
 
     // MARK: - Telling the user
 
-    /// A download that fails must say so (story 37: "I learn what is missing instead of
-    /// hitting a silent failure"). The stderr tail stays in the log; this is the line
+    /// A download that fails must say so, so the user learns what is missing instead of
+    /// hitting a silent failure. The stderr tail stays in the log; this is the line
     /// the panel shows.
     @Test(
         "every failure carries a pt-BR line for the panel",

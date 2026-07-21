@@ -1,9 +1,9 @@
 import SpeechLoggerCore
 import SwiftUI
 
-/// The menubar dropdown panel (SPEC "UI"): three sections built from `PanelModel`,
-/// plus the degraded Input-Monitoring banner and a footer. A thin render of
-/// `PanelViewModel` — no pipeline logic lives here.
+/// The menubar dropdown panel: three sections built from `PanelModel`, plus the
+/// degraded Input-Monitoring banner and a footer. A thin render of `PanelViewModel`
+/// — no pipeline logic lives here.
 struct PanelView: View {
     @ObservedObject var viewModel: PanelViewModel
     /// The id whose "copiado" flash is showing, cleared shortly after a copy.
@@ -92,7 +92,7 @@ struct PanelView: View {
         }
     }
 
-    /// The degraded state, never a modal (SPEC): one line per failing prerequisite,
+    /// The degraded state, never a modal: one line per failing prerequisite,
     /// each with what breaks and the way out. The app stays usable behind it, and the
     /// hotkey keeps recording.
     @ViewBuilder private var preflightBanner: some View {
@@ -250,7 +250,7 @@ private struct LiveRowView: View {
 
     /// The recording clock (recording is stopped by the hotkey, so it carries no stop
     /// control); every other live kind is a processing item with a hover-revealed
-    /// "stop processing" button (story 30).
+    /// "stop processing" button.
     @ViewBuilder private var trailing: some View {
         if case .recording = row.kind {
             Text(clock).font(.system(size: 12, weight: .semibold).monospacedDigit())
@@ -409,8 +409,8 @@ private struct PulsingDot: View {
 /// permanent icon; the frequent ones (copy, retry, delete) stay where they are.
 private struct RowMenu: View {
     let onOpenFolder: () -> Void
-    /// Re-run the item whole (story 41). `nil` for a row with no audio to run again,
-    /// which drops the entry rather than showing one that would do nothing.
+    /// Re-run the item whole. `nil` for a row with no audio to run again, which drops
+    /// the entry rather than showing one that would do nothing.
     let onReprocess: (() -> Void)?
 
     var body: some View {

@@ -34,7 +34,7 @@ import Foundation
         self.organization = organization
     }
 
-    // MARK: - Stop (story 30, 31)
+    // MARK: - Stop
 
     /// Manually stop an in-flight processing item. Routed to both lanes; the one that
     /// owns the id kills its subprocess and records `cancelled` (distinct from
@@ -47,7 +47,7 @@ import Foundation
         }
     }
 
-    // MARK: - Retry (story 29)
+    // MARK: - Retry
 
     /// Retry a `failed`/`cancelled` item from the stage it died at, reusing the
     /// retained artifacts. A transcription-stage resume re-enters the serial lane
@@ -86,8 +86,8 @@ import Foundation
     ///
     /// Distinct from `retry`, which resumes from the death stage and *reuses* the
     /// retained artifacts. Reprocess exists because retry cannot reach the failure #24
-    /// documents: a pass can return fluent text that is not the dictation at all (there,
-    /// a chat reply), and the SPEC deliberately does not judge fidelity at runtime, so
+    /// documents: a pass can return fluent text that is not the speech at all (there,
+    /// a chat reply), and the app deliberately does not judge fidelity at runtime, so
     /// the item lands `organized` with no error and no stage to resume from. Short of
     /// this, the only recovery is deleting the item and speaking it again.
     ///
@@ -115,7 +115,7 @@ import Foundation
         Task { await transcription.enqueue(id) }
     }
 
-    // MARK: - Graceful quit (story 35, ADR-0006)
+    // MARK: - Graceful quit (ADR-0006)
 
     /// Quit without ever blocking. A recording in progress is discarded silently (it
     /// has nothing to resume). Every in-flight processing item is marked `cancelled`

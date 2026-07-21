@@ -1,6 +1,6 @@
 # speech-logger
 
-A macOS menubar app that turns speech into organized text, asynchronously. See `PRD.md`.
+A macOS menubar app that turns speech into organized text, asynchronously. See `CONTEXT.md`.
 
 ## License constraint
 

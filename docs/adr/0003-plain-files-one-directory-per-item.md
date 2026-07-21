@@ -37,8 +37,7 @@ Rules:
 
 - A relational store's query power would sit entirely idle; isolated directories buy the concurrency
   model (ADR-0006) for free — no shared writer, no lock.
-- This **amends `PRD.md` §5**: `pass1.txt` is retained too, so the two-pass contract is auditable end
-  to end.
+- `pass1.txt` is retained alongside the final text, so the two-pass contract is auditable end to end.
 - Disk grows unbounded on the retained mp3s; accepted, mitigated only by the visible running clock and
   manual delete.
 - `meta.json`'s `schemaVersion` is the migration seam if the shape ever changes.

@@ -34,18 +34,18 @@ public struct Item: Equatable, Sendable, Identifiable {
     public var state: ItemState { meta.state }
 
     /// A stopped/broken item can be retried unless it died at `recording`, which
-    /// has nothing to resume (SPEC "Storage and the item state machine", ADR-0006).
+    /// has nothing to resume (ADR-0006).
     public var isRetryable: Bool {
         guard let stage = meta.deathStage else { return false }
         return stage != .recording
     }
 
     /// A settled item can be reprocessed — re-run whole from `audio.mp3` — when that
-    /// audio is on disk, which is true of every item that got past the recording stage
-    /// (SPEC "Reprocess", #24).
+    /// audio is on disk, which is true of every item that got past the recording
+    /// stage (#24).
     ///
     /// The `organized` arm is the whole difference from `isRetryable`: an item can reach
-    /// the happy-path terminal and still hold the wrong text (the SPEC deliberately does
+    /// the happy-path terminal and still hold the wrong text (the app deliberately does
     /// not judge fidelity at runtime), and retry has no death stage to resume from there.
     /// Off the happy path the two agree, but for different reasons — retry asks "is there
     /// a stage to resume?", reprocess asks "is there audio to run again?".

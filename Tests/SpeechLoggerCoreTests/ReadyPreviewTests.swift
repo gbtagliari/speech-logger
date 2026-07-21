@@ -3,8 +3,8 @@ import Testing
 @testable import SpeechLoggerCore
 
 /// The *Prontos* preview is clamped to a char cap so the panel shows a few lines,
-/// not one and not the whole text (SPEC "UI", story 23). Whitespace and newlines
-/// collapse to single spaces so the clamp reads as flowing text, and the SwiftUI
+/// not one and not the whole text. Whitespace and newlines collapse to single spaces
+/// so the clamp reads as flowing text, and the SwiftUI
 /// view applies the visual 3-line limit on top of this bound.
 struct ReadyPreviewTests {
     @Test("a short text is returned whole, with no ellipsis")

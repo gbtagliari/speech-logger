@@ -40,7 +40,7 @@ public actor OrganizationLane {
     ///
     /// `from` is the resume stage (default `.pass1`, a fresh organization). A retry at
     /// `.pass2` skips annotate and rewrites from the retained `pass1.txt`, reusing the
-    /// pivot rather than re-annotating (#22, SPEC "Retry").
+    /// pivot rather than re-annotating (#22).
     public func organize(_ id: String, from stage: Stage = .pass1) {
         guard tasks[id] == nil else { return }
         tasks[id] = Task {
@@ -49,7 +49,7 @@ public actor OrganizationLane {
         }
     }
 
-    /// Stop one organizing item (the manual "stop processing" control, story 30):
+    /// Stop one organizing item (the manual "stop processing" control):
     /// cancel its task, which terminates the in-flight `claude` pass; `process` then
     /// records `cancelled` at whichever pass was interrupted. An id this lane is not
     /// running is a no-op.

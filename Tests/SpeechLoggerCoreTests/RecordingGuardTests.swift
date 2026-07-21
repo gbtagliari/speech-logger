@@ -2,10 +2,10 @@ import Testing
 
 @testable import SpeechLoggerCore
 
-/// The dual guard gates recording *before* transcription (SPEC "The pipeline"):
-/// a too-short tap is discarded silently (story 32); a long-but-silent recording
-/// fails `no_speech` (story 33). It exists because `mlx_whisper` hallucinates
-/// (`E aí`) on digital silence. Pure decision logic over `(duration, peak)`.
+/// The dual guard gates recording *before* transcription: a too-short tap is
+/// discarded silently; a long-but-silent recording fails `no_speech`. It exists
+/// because `mlx_whisper` hallucinates (`E aí`) on digital silence. Pure decision
+/// logic over `(duration, peak)`.
 struct RecordingGuardTests {
     // The default guard's thresholds, referenced by name so a tuning change is
     // one edit here and there.

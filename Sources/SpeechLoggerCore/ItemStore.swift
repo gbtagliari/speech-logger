@@ -214,8 +214,8 @@ public struct ItemStore: Sendable {
     }
 
     /// Silently hard-remove an item's directory (not to Trash). For a too-short
-    /// accidental tap (story 32) and a `recording`-stage orphan: there is no
-    /// artifact worth keeping and it should litter neither the log nor the Trash.
+    /// accidental tap and a `recording`-stage orphan: there is no artifact worth
+    /// keeping and it should litter neither the log nor the Trash.
     public func discard(_ id: String) throws(StoreError) {
         guard directoryExists(id) else { throw StoreError.itemNotFound(id) }
         try wrap { try FileManager.default.removeItem(at: directory(for: id)) }

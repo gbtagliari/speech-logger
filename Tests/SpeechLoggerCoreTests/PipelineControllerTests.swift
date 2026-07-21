@@ -95,7 +95,7 @@ import Testing
 
     @Test("reprocess re-runs an organized item from the audio and replaces its final text")
     func reprocessOrganizedItem() async throws {
-        // #24: the item reached `organized` with a chat reply instead of the dictation,
+        // #24: the item reached `organized` with a chat reply instead of the speech,
         // and no error. Retry has no stage to offer; only a full re-run recovers it.
         let ctx = try Context()
         let id = try ctx.queuedItem(withAudio: true)

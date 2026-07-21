@@ -5,8 +5,8 @@ import Foundation
 /// `claude` (both LLM passes).
 ///
 /// The paths are absolute because none of these binaries is on a GUI-launched
-/// app's `PATH`. This is the single config surface for them; the SPEC notes they
-/// are "one day configurable", so this is a value type with an overridable
+/// app's `PATH`. This is the single config surface for them, and they are meant to
+/// become user-configurable one day, so this is a value type with an overridable
 /// initializer rather than bare global constants.
 public struct ToolchainPaths: Equatable, Sendable {
     /// `mlx_whisper` — local transcription.
@@ -24,8 +24,7 @@ public struct ToolchainPaths: Equatable, Sendable {
 
     /// The paths as resolved on the build machine. `mlx_whisper` and `ffmpeg`
     /// are Homebrew binaries; `claude` lives under the user's home. These are the
-    /// MVP defaults; making them user-editable is deferred (SPEC "one day
-    /// configurable").
+    /// MVP defaults; making them user-editable is deferred.
     public static let defaults = ToolchainPaths(
         mlxWhisper: "/opt/homebrew/bin/mlx_whisper",
         ffmpeg: "/opt/homebrew/bin/ffmpeg",

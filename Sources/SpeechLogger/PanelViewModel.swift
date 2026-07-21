@@ -9,8 +9,8 @@ import SpeechLoggerCore
 final class PanelViewModel: ObservableObject {
     /// The three sections, rebuilt from the item list on each refresh.
     @Published var model = PanelModel(live: [], ready: [], needsYou: [])
-    /// The launch-time prerequisite check (SPEC "First-run preflight"): its failures
-    /// are the panel's degraded banner. Re-read on focus and panel-open, never a modal.
+    /// The launch-time prerequisite check: its failures are the panel's degraded
+    /// banner. Re-read on focus and panel-open, never a modal.
     @Published var preflight = PreflightReport.satisfied
     /// The model download is running: the fix is in flight, so the banner shows
     /// progress instead of offering the click again.
@@ -22,23 +22,23 @@ final class PanelViewModel: ObservableObject {
     /// panel's *Acontecendo agora* clock matches the menubar title exactly.
     @Published var recordingSeconds = 0
 
-    /// Copy an organized item's final pass-2 text to the clipboard (story 22).
+    /// Copy an organized item's final pass-2 text to the clipboard.
     var onCopy: (String) -> Void = { _ in }
-    /// Send an item to the macOS Trash (stories 25, 26).
+    /// Send an item to the macOS Trash.
     var onDelete: (String) -> Void = { _ in }
-    /// Retry a failed/cancelled item from the stage it died at (story 29).
+    /// Retry a failed/cancelled item from the stage it died at.
     var onRetry: (String) -> Void = { _ in }
     /// Re-run an item whole, from its audio, discarding what the last run produced
-    /// (story 41, #24). Confirms first — it throws away the current final text.
+    /// (#24). Confirms first — it throws away the current final text.
     var onReprocess: (String) -> Void = { _ in }
-    /// Stop an in-flight processing item — queued/transcribing/organizing (story 30).
+    /// Stop an in-flight processing item — queued/transcribing/organizing.
     var onStop: (String) -> Void = { _ in }
     /// Reveal an item's directory in Finder, so its artifacts (audio, transcript,
     /// the two passes) are reachable when the panel's preview is not enough.
     var onOpenFolder: (String) -> Void = { _ in }
     /// Deep-link to the Input Monitoring pane (degraded state).
     var onOpenSettings: () -> Void = {}
-    /// Download the Whisper model — the one prerequisite preflight can fix (story 39).
+    /// Download the Whisper model — the one prerequisite preflight can fix.
     var onDownloadModel: () -> Void = {}
     var onQuit: () -> Void = {}
 }

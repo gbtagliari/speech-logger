@@ -5,7 +5,7 @@ import SpeechLoggerCore
 /// against (issue #17). One place so the path and availability check don't drift
 /// between `TranscriberTests` and `TranscriptionLaneTests`.
 enum SampleFixtures {
-    /// `caso-02.mp3`: ~17 s of pt-BR dictation whose ground truth contains the
+    /// `caso-02.mp3`: ~17 s of pt-BR speech whose ground truth contains the
     /// distinctive words `whisper-tiny` mis-hears ("Packers", "daily"), so a correct
     /// transcript is proof the pinned turbo model ran.
     static let caso02 = URL(fileURLWithPath: repoRoot)

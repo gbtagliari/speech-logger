@@ -13,8 +13,8 @@ public enum EncodeError: Error, Equatable {
 /// Encodes a recorded wav to the retained mp3 by shelling out to `ffmpeg`
 /// (ADR-0002): **mono / 16 kHz / 64 kbps**. The mp3 is the recording, the
 /// transcriber input, and the retained artifact at once, so the kept file
-/// reproduces production exactly (SPEC "The pipeline"). 16 kHz is Whisper's exact
-/// acceptance-set sample format.
+/// reproduces production exactly. 16 kHz is Whisper's exact acceptance-set
+/// sample format.
 ///
 /// The encode writes a sibling temp file inside the destination directory, then
 /// renames it into place — so a reader never sees a half-written mp3 and an

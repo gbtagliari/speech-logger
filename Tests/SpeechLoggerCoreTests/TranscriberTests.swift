@@ -43,7 +43,7 @@ struct TranscriberTests {
     func environmentIsOfflineAndFindsFfmpeg() {
         let env = Transcriber.environment(
             base: ["PATH": "/usr/bin"], ffmpegDir: "/opt/homebrew/bin")
-        // Offline so a dictation never stalls on the network.
+        // Offline so a transcription never stalls on the network.
         #expect(env["HF_HUB_OFFLINE"] == "1")
         // mlx_whisper shells out to `ffmpeg` by name; its dir must be on PATH.
         #expect(env["PATH"] == "/opt/homebrew/bin:/usr/bin")

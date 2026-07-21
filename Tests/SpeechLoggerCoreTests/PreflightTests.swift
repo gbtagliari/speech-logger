@@ -3,9 +3,8 @@ import Testing
 
 @testable import SpeechLoggerCore
 
-/// The launch-time gate (SPEC "First-run preflight"): four things checked, every
-/// failure reported rather than fixed, and the one exception (the model download)
-/// carrying a fix the user can click.
+/// The launch-time gate: four things checked, every failure reported rather than
+/// fixed, and the one exception (the model download) carrying a fix the user can click.
 struct PreflightTests {
     /// A world where everything is satisfied: real files on disk for the three
     /// binaries and the credentials, and a hub holding the model's weights.

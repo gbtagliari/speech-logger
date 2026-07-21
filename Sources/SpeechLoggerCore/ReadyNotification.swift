@@ -1,9 +1,9 @@
 import Foundation
 
-/// The ready notification as a pure value (SPEC "UI", stories 21, 27): what the
-/// banner says for one `organized` item, decided without `UserNotifications`. The
-/// framework wiring — authorization, the `Copiar`/`Dispensar` buttons, delivery —
-/// lives in the app target's `ReadyNotifier`; this is the part worth testing.
+/// The ready notification as a pure value: what the banner says for one `organized`
+/// item, decided without `UserNotifications`. The framework wiring — authorization,
+/// the `Copiar`/`Dispensar` buttons, delivery — lives in the app target's
+/// `ReadyNotifier`; this is the part worth testing.
 public struct ReadyNotification: Sendable {
     /// The banner's char cap. Tighter than the panel's `ReadyPreview.defaultMaxChars`
     /// because a notification shows fewer lines than a panel row; the banner is a

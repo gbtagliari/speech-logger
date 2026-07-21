@@ -1,6 +1,6 @@
 import Foundation
 
-/// One prerequisite the app checks at launch (SPEC "First-run preflight").
+/// One prerequisite the app checks at launch.
 public enum PreflightCheck: String, Sendable, Equatable, CaseIterable {
     /// `mlx_whisper` is on disk at its absolute path.
     case mlxWhisper
@@ -9,7 +9,7 @@ public enum PreflightCheck: String, Sendable, Equatable, CaseIterable {
     /// `claude` is on disk at its absolute path.
     case claude
     /// `claude` is logged in — read as the presence of its credentials file, never as
-    /// a burned CLI call (SPEC).
+    /// a burned CLI call.
     case claudeLogin
     /// The ~1.5 GB Whisper model is in the HuggingFace cache.
     case whisperModel
@@ -111,7 +111,7 @@ public struct PreflightReport: Sendable, Equatable {
     }
 
     /// Any *other* prerequisite is missing. These aggregate into the `failed` icon
-    /// tier (SPEC): the glyph says "something needs you", the panel says which.
+    /// tier: the glyph says "something needs you", the panel says which.
     public var hasFailedPrerequisite: Bool {
         failures.contains { $0.check != .inputMonitoring }
     }
@@ -145,7 +145,7 @@ public struct PreflightConfiguration: Sendable {
 }
 
 /// The launch-time gate: check the prerequisites, report what is missing, fix nothing
-/// on its own (SPEC "First-run preflight").
+/// on its own.
 ///
 /// A read, not a poll. The app runs it at launch and re-runs it on focus and
 /// panel-open, which is also how a mid-session grant or a finished model download
@@ -162,7 +162,7 @@ public enum Preflight {
         configuration: PreflightConfiguration = .defaults,
         inputMonitoringGranted: Bool
     ) -> PreflightReport {
-        // Presence only, never executability: the SPEC's `stat` check. A binary that is
+        // Presence only, never executability: a plain `stat` check. A binary that is
         // there but unusable dies as `missing_binary` at capture time, retryable.
         let exists = { (path: String) in FileManager.default.fileExists(atPath: path) }
         return PreflightReport(results: [

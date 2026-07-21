@@ -2,7 +2,7 @@ import Foundation
 
 /// A terse, pt-BR "how long ago" stamp for a panel row's right edge: `agora`,
 /// `N min`, `N h`, `N d`. Deliberately coarse — the panel wants a glanceable age,
-/// not a precise duration (SPEC "UI", story 23).
+/// not a precise duration.
 public enum CompactRelativeTime {
     public static func text(from date: Date, now: Date) -> String {
         let seconds = Int(now.timeIntervalSince(date))

@@ -2,9 +2,9 @@ import Testing
 
 @testable import SpeechLoggerCore
 
-/// The ready notification's content as a pure value (SPEC "UI", stories 21, 27). The
-/// `UNUserNotificationCenter` wiring lives in the app target; everything decidable
-/// without it — the body preview, the identity that keeps it one-per-item — is here.
+/// The ready notification's content as a pure value. The `UNUserNotificationCenter`
+/// wiring lives in the app target; everything decidable without it — the body preview,
+/// the identity that keeps it one-per-item — is here.
 struct ReadyNotificationTests {
     @Test("the body previews the final text")
     func bodyPreviewsFinalText() {
