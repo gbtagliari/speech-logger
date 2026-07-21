@@ -15,6 +15,33 @@ struct SubprocessLaunchError: Error {
     let message: String
 }
 
+/// The subprocess seam. `ClaudeOrganizer` runs against this rather than calling
+/// `runSubprocess` directly, so its wiring — which prompt rides in argv, that the
+/// transcript goes on stdin and never argv, which `Stage` tags a failure, how the
+/// stderr tail is capped — is testable against canned process results, with no
+/// binary, no network, and no billed call. Production injects `LiveSubprocessRunner`.
+protocol SubprocessRunning: Sendable {
+    func run(
+        executable: String,
+        arguments: [String],
+        environment: [String: String],
+        stdin: Data?
+    ) async throws(SubprocessLaunchError) -> SubprocessResult
+}
+
+/// The production runner: launches the real binary via `runSubprocess`.
+struct LiveSubprocessRunner: SubprocessRunning {
+    func run(
+        executable: String,
+        arguments: [String],
+        environment: [String: String],
+        stdin: Data?
+    ) async throws(SubprocessLaunchError) -> SubprocessResult {
+        try await runSubprocess(
+            executable: executable, arguments: arguments, environment: environment, stdin: stdin)
+    }
+}
+
 /// How much of a subprocess's stderr rides along in an error. Enough to carry the
 /// telltale line each failure has, capped so a runaway log never bloats `meta.json`.
 private let stderrTailLimit = 2000

@@ -67,7 +67,9 @@ let project = Project(
             sources: ["Sources/SpeechLoggerCore/**"],
             // The two organization prompts (ADR-0001), bundled so the shipped app
             // can load them at runtime via `Prompts.bundled()` (`Bundle.module`).
-            // Committed copies of the calibrated `.scratch/.../twopass/*.txt`.
+            // These are canonical. They started as copies of the bake-off prompts in
+            // `.scratch/.../twopass/*.txt` and diverged from them in ADR-0008; that
+            // directory is a frozen record of the bake-off, not a source to sync with.
             resources: ["Sources/SpeechLoggerCore/Resources/**"]
         ),
         .target(
@@ -77,6 +79,26 @@ let project = Project(
             bundleId: "\(bundleIdPrefix).SpeechLoggerCoreTests",
             deploymentTargets: deploymentTargets,
             sources: ["Tests/SpeechLoggerCoreTests/**"],
+            dependencies: [.target(name: "SpeechLoggerCore")]
+        ),
+        // The prompt-drift measurement (issue #18). A command-line tool, *not* a test
+        // target: it runs the real two-pass pipeline, so every sample makes billed
+        // `claude` calls. Being an executable means `tuist test` cannot run it even by
+        // accident, which is the point — the unit tests stay offline and free.
+        // Run it deliberately: `tuist run DriftCheck --samples 10`.
+        .target(
+            name: "DriftCheck",
+            destinations: .macOS,
+            product: .commandLineTool,
+            bundleId: "\(bundleIdPrefix).DriftCheck",
+            deploymentTargets: deploymentTargets,
+            sources: [
+                "Sources/DriftCheck/**",
+                // The judge is the single source of truth for the fidelity contract.
+                // It is compiled into both this tool and the test target (where
+                // `FidelityJudgeTests` covers it offline) rather than duplicated.
+                "Tests/SpeechLoggerCoreTests/FidelityJudge.swift",
+            ],
             dependencies: [.target(name: "SpeechLoggerCore")]
         ),
     ],

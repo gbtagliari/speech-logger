@@ -80,7 +80,9 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
 - **Acceptance set** — the regression yardstick for **braindump organization**: four cases (three real recordings), each with a
   hand-approved expected output, judged against the fidelity contract by idea-count, new-word
   diff, modal check, and slip check. [`.scratch/dictation-tool/assets/acceptance-set.md`](.scratch/dictation-tool/assets/acceptance-set.md).
-  It is a **development** artifact (offline, human-run), not a runtime check.
+  It is a **development** artifact (human-run), not a runtime check. Judging it needs the real
+  pipeline, so it is a sampled **measurement** run on demand via `DriftCheck`, reporting a failure
+  *rate* over N samples rather than a pass/fail — never a unit test (ADR-0009).
 
 ## Pipeline and process terms
 

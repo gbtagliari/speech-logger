@@ -201,30 +201,29 @@ struct OrganizationLaneTests {
         #expect(await organizer.annotateCalls == 0)  // never fell back to re-annotating
     }
 
-    // MARK: - End-to-end (real claude against a real sample transcript)
+    // MARK: - End-to-end through the real ClaudeOrganizer (canned subprocess)
 
-    @Test(
-        "a real transcribed item organizes end-to-end through the lane",
-        .enabled(if: AcceptanceFixtures.organizationAvailable))
-    func organizesRealItemThroughLane() async throws {
+    /// The deepest offline integration: a transcribed item through the lane, the real
+    /// `ClaudeOrganizer`, and the real `outcome` gating, with only the subprocess
+    /// canned. Proves the lane persists the pass-1 pivot and the final text from the
+    /// actual two-call sequence. What the model *writes* is not asserted here — that
+    /// is a live measurement, not a test (`scripts/drift-check`).
+    @Test("a transcribed item organizes end-to-end through the lane and the real organizer")
+    func organizesItemThroughLaneAndRealOrganizer() async throws {
         let store = try makeStore()
-        let item = try store.create()
-        // Stage the real caso-02 transcript, exactly as the transcription lane would.
-        let transcript = try String(contentsOf: AcceptanceFixtures.transcriptURL(case: "02"), encoding: .utf8)
-        _ = try store.markQueued(item.id, duration: 17.3)
-        _ = try store.markTranscribing(item.id)
-        try store.write(Data(transcript.utf8), to: ItemFile.transcript, for: item.id)
+        let id = try transcribedItem(in: store, transcript: "fala qualquer")
+        let organizer = ClaudeOrganizer(
+            claude: "/fake/claude",
+            prompts: Prompts(pass1: "P1", pass2: "P2"),
+            runner: ScriptedClaude(results: ["ANOTADO", "FINAL"]))
 
-        let lane = OrganizationLane(store: store, organizer: try AcceptanceFixtures.organizer())
-        await lane.organize(item.id)
+        let lane = OrganizationLane(store: store, organizer: organizer)
+        await lane.organize(id)
         await lane.waitUntilIdle()
 
-        #expect(try store.meta(for: item.id).state == .organized)
-        #expect(try store.read(file: ItemFile.pass1, for: item.id) != nil)
-        let final = try #require(try store.finalText(for: item.id))
-        // The fillers `Puts cara` / `né` are gone; the hedge `acho que` survives.
-        #expect(final.localizedCaseInsensitiveContains("acho que"))
-        #expect(!final.contains("Puts cara"))
+        #expect(try store.meta(for: id).state == .organized)
+        #expect(try store.read(file: ItemFile.pass1, for: id) == Data("ANOTADO".utf8))
+        #expect(try store.finalText(for: id) == "FINAL")
     }
 
     // MARK: - Fixtures & helpers
@@ -244,6 +243,32 @@ struct OrganizationLaneTests {
         _ = try store.markTranscribing(item.id)
         try store.write(Data(transcript.utf8), to: ItemFile.transcript, for: item.id)
         return item.id
+    }
+}
+
+// MARK: - Test double for the subprocess seam
+
+/// A `claude` that never runs: it answers successive calls with the next canned
+/// `result`, so the real `ClaudeOrganizer` can be driven through both passes offline.
+private actor ScriptedClaude: SubprocessRunning {
+    private var results: [String]
+
+    init(results: [String]) {
+        self.results = results
+    }
+
+    func run(
+        executable: String,
+        arguments: [String],
+        environment: [String: String],
+        stdin: Data?
+    ) async throws(SubprocessLaunchError) -> SubprocessResult {
+        let text = results.isEmpty ? "" : results.removeFirst()
+        let envelope = try? JSONSerialization.data(withJSONObject: [
+            "is_error": false, "subtype": "success", "result": text,
+        ])
+        return SubprocessResult(
+            terminationStatus: 0, stdout: envelope ?? Data(), stderr: Data())
     }
 }
 

@@ -115,6 +115,32 @@ struct FidelityJudgeTests {
         #expect(FidelityJudge.slipCheck(candidate: legit, sample).passed)
     }
 
+    // MARK: - Role collapse
+
+    /// The failure mode that actually shows up in live sampling: instead of
+    /// transforming the dictation, the model answers it as if it were a chat message
+    /// to an assistant, summarizing the content and offering to act on it. The
+    /// candidate below is a hand-written miniature of that shape.
+    ///
+    /// The judge has no "is this a chat reply?" check and does not need one: a reply
+    /// necessarily drops the speaker's ideas and modal force, so the existing checks
+    /// catch it. This test pins that, so a future loosening of idea count or modal
+    /// check cannot quietly let role collapse through.
+    @Test("a chat reply instead of a rewrite fails on ideas and modal force")
+    func roleCollapseIsCaught() {
+        let reply = """
+            Entendi a explicação sobre o fluxo de merge. Resumo da regra: a correção do \
+            conflito não deve ser feita ali, e sim na origem da mudança. Quer que eu \
+            documente isso em um guia de contribuição? Me diga e eu sigo.
+            """
+        let checks = FidelityJudge.judge(candidate: reply, case: sample)
+        let failed = Set(checks.filter { !$0.passed }.map(\.name))
+
+        #expect(failed.contains("idea count"))  // "Packers", "bug fix", "/sync" gone
+        #expect(failed.contains("modal check"))  // "não pode" / "tem que" gone
+        #expect(failed.contains("new-word diff"))  // "não deve" is a downgrade
+    }
+
     // MARK: - Whole-word matching
 
     @Test("whole-word matching does not fire a word inside a larger word")

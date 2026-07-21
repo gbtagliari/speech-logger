@@ -1,21 +1,37 @@
 import Foundation
 import SpeechLoggerCore
 
-/// The acceptance set as test fixtures: the four cases, their transcripts, and the
-/// gate for the developer-run harness (issue #18). The recordings and their
-/// transcripts live in `.scratch/` (gitignored — personal audio), so the harness is
-/// guarded on their presence, exactly like the #17 transcription end-to-end tests.
-/// Case 01 is typed, so its transcript is inline.
-enum AcceptanceFixtures {
-    /// The harness runs the real two-pass pipeline, so it needs `claude`, live
-    /// credentials, and the three recorded transcripts. Absent any of them, the
-    /// harness is skipped (never a false failure on a machine without the toolchain).
-    static let organizationAvailable: Bool =
-        FileManager.default.fileExists(atPath: ToolchainPaths.defaults.claude)
-        && FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.claude/.credentials.json")
-        && ["02", "03", "04"].allSatisfy {
-            FileManager.default.fileExists(atPath: transcriptURL(case: $0).path)
+/// The acceptance set (issue #18): the four cases and their fidelity-contract
+/// expectations, plus the toolchain gate the drift check needs.
+///
+/// This used to be a test fixture. It is not a test: judging it requires the **real**
+/// two-pass pipeline, so every run makes billed `claude` calls and its verdict is
+/// nondeterministic by construction (the input is a model). It now backs the
+/// developer-run `DriftCheck` tool instead, where a *rate over N samples* is reported
+/// rather than a single pass/fail that a coin flip decides.
+enum AcceptanceCases {
+    /// The drift check runs the real pipeline, so it needs `claude`, live credentials,
+    /// and the three recorded transcripts. Absent any of them it refuses to run rather
+    /// than reporting a meaningless zero.
+    static var available: Bool { unavailableReason == nil }
+
+    /// Why the check cannot run, for an actionable message instead of a silent skip
+    /// (the trap the old test-gated version fell into: it passed by running nothing).
+    static var unavailableReason: String? {
+        if !FileManager.default.fileExists(atPath: ToolchainPaths.defaults.claude) {
+            return "claude not found at \(ToolchainPaths.defaults.claude)"
         }
+        if !FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.claude/.credentials.json") {
+            return "not logged in: no ~/.claude/.credentials.json"
+        }
+        let missing = ["02", "03", "04"].filter {
+            !FileManager.default.fileExists(atPath: transcriptURL(case: $0).path)
+        }
+        guard missing.isEmpty else {
+            return "missing transcripts in .scratch/: " + missing.map { "caso-\($0)" }.joined(separator: ", ")
+        }
+        return nil
+    }
 
     /// The `mlx_whisper` transcript of a recorded case, in `.scratch/`.
     static func transcriptURL(case id: String) -> URL {
@@ -23,30 +39,39 @@ enum AcceptanceFixtures {
             .appendingPathComponent(".scratch/dictation-tool/samples/caso-\(id).txt")
     }
 
-    /// A real organizer wired with the bundled prompts.
+    /// A real organizer wired with the committed prompts.
+    ///
+    /// The prompts are read from the source tree rather than via `Prompts.bundled()`:
+    /// this is a developer tool run from the repo, so reading the committed files is
+    /// simpler than resolving a framework resource bundle from a command-line tool,
+    /// and it measures exactly the text that is under version control.
     static func organizer() throws -> ClaudeOrganizer {
-        ClaudeOrganizer(prompts: try Prompts.bundled())
+        ClaudeOrganizer(prompts: Prompts(pass1: try prompt("pass1"), pass2: try prompt("pass2")))
     }
 
-    /// The four acceptance cases. Transcripts for the recorded cases are read from
-    /// `.scratch/`; if absent, the field is empty and the harness is skipped anyway.
-    /// Each case's `forbiddenInsertions` is unioned with `sharedForbiddenInsertions`,
-    /// so the new-word-diff check has teeth on every case, not only the typed case 01.
-    static let cases: [AcceptanceCase] = [caso01, caso02, caso03, caso04].map(withSharedForbidden)
+    private static func prompt(_ name: String) throws -> String {
+        try String(
+            contentsOf: URL(fileURLWithPath: repoRoot)
+                .appendingPathComponent("Sources/SpeechLoggerCore/Resources/\(name).txt"),
+            encoding: .utf8)
+    }
+
+    /// The four acceptance cases. Each case's `forbiddenInsertions` is unioned with
+    /// `sharedForbiddenInsertions`, so the new-word-diff check has teeth on every
+    /// case, not only the typed case 01.
+    static var cases: [AcceptanceCase] { [caso01, caso02, caso03, caso04].map(withSharedForbidden) }
 
     /// The semantically-weighted words the fidelity contract names as forbidden
     /// insertions (`.scratch/dictation-tool/assets/fidelity-contract.md`, "Forbidden":
-    /// "words that qualify, hedge, intensify or scope"). The new-word diff flags any of
-    /// these that appears in the output but *not* the transcript — so it fires on a
-    /// real recorded case too, not just case 01's documented ChatGPT edits. A word a
-    /// case legitimately spoke is excluded automatically by the "not in source" clause
-    /// (e.g. `apenas` in case 04's `deveria ter apenas mil`), so this never false-fails.
+    /// "words that qualify, hedge, intensify or scope"). A word a case legitimately
+    /// spoke is excluded automatically by the "not in source" clause (e.g. `apenas` in
+    /// case 04's `deveria ter apenas mil`), so this never false-fails.
     static let sharedForbiddenInsertions = [
         "diretamente", "apenas", "provavelmente", "correspondente",
         "basicamente", "simplesmente", "obviamente", "claramente",
     ]
 
-    // MARK: - The cases (expectations from acceptance-set.md, made testable)
+    // MARK: - The cases (expectations from acceptance-set.md, made checkable)
 
     /// Case 01 — merge conflicts in the Packers branch (typed). The ChatGPT workflow
     /// downgraded `não pode` → `não deve` and inserted `diretamente` / `correspondente`.
@@ -101,27 +126,26 @@ enum AcceptanceFixtures {
     // MARK: - Internals
 
     /// Union the shared contract-forbidden words into a case's own list (deduped).
-    private static func withSharedForbidden(_ testCase: AcceptanceCase) -> AcceptanceCase {
-        var merged = testCase.forbiddenInsertions
+    private static func withSharedForbidden(_ acceptanceCase: AcceptanceCase) -> AcceptanceCase {
+        var merged = acceptanceCase.forbiddenInsertions
         for word in sharedForbiddenInsertions where !merged.contains(word) { merged.append(word) }
         return AcceptanceCase(
-            id: testCase.id,
-            transcript: testCase.transcript,
-            preservedIdeas: testCase.preservedIdeas,
-            survivingModals: testCase.survivingModals,
+            id: acceptanceCase.id,
+            transcript: acceptanceCase.transcript,
+            preservedIdeas: acceptanceCase.preservedIdeas,
+            survivingModals: acceptanceCase.survivingModals,
             forbiddenInsertions: merged,
-            markedNoise: testCase.markedNoise)
+            markedNoise: acceptanceCase.markedNoise)
     }
 
-    /// Read a recorded transcript, or "" if absent (the harness is gated on presence,
-    /// so an empty transcript never actually reaches the pipeline).
+    /// Read a recorded transcript, or "" if absent (the tool refuses to run when the
+    /// gate is unmet, so an empty transcript never reaches the pipeline).
     private static func transcript(_ id: String) -> String {
         (try? String(contentsOf: transcriptURL(case: id), encoding: .utf8)) ?? ""
     }
 
-    /// Anchored to this source file, not the process cwd (`xcodebuild` sets it to
-    /// DerivedData): three parents up from `Tests/SpeechLoggerCoreTests/ThisFile.swift`
-    /// is the repo root that holds `.scratch/`.
+    /// Anchored to this source file, not the process cwd: three parents up from
+    /// `Sources/DriftCheck/ThisFile.swift` is the repo root that holds `.scratch/`.
     private static let repoRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         .path

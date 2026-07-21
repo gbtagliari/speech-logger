@@ -52,6 +52,9 @@ public struct ClaudeOrganizer: Organizing {
     private let claude: String
     private let pass1Prompt: String
     private let pass2Prompt: String
+    /// The subprocess seam (`SubprocessRunning`). Production gets the live runner;
+    /// tests inject canned results so the wiring is covered without a billed call.
+    private let runner: any SubprocessRunning
 
     /// The pinned model. The full id, never the `sonnet` alias (which re-points on
     /// the next Sonnet release). There is no fallback model — only retry.
@@ -62,9 +65,20 @@ public struct ClaudeOrganizer: Organizing {
     ///   - prompts: the two system prompts. Production loads them from the bundle
     ///     via `Prompts.bundled()`; tests inject strings.
     public init(claude: String = ToolchainPaths.defaults.claude, prompts: Prompts) {
+        self.init(claude: claude, prompts: prompts, runner: LiveSubprocessRunner())
+    }
+
+    /// Injects the subprocess seam. Internal so the public API stays a two-argument
+    /// init; tests reach it through `@testable import`.
+    init(
+        claude: String = ToolchainPaths.defaults.claude,
+        prompts: Prompts,
+        runner: any SubprocessRunning
+    ) {
         self.claude = claude
         self.pass1Prompt = prompts.pass1
         self.pass2Prompt = prompts.pass2
+        self.runner = runner
     }
 
     /// The pinned `claude` argv for one pass. Built as an array (never a shell
@@ -81,6 +95,34 @@ public struct ClaudeOrganizer: Organizing {
             "--no-session-persistence",
             "--output-format", "json",  // the only safe failure signal
         ]
+    }
+
+    /// The XML-ish tag each pass's input is wrapped in on stdin.
+    ///
+    /// Load-bearing, not decoration. Without it the system prompt ended in a dangling
+    /// `TRANSCRIÇÃO:` label while the text arrived as a separate user turn, and the
+    /// model would read a *clean* dictation as a request addressed to it — answering
+    /// the transcript ("quer que eu documente isso?") instead of transforming it.
+    /// Measured at ~49% of runs on the typed acceptance case (22/45), and 0/15 once
+    /// the input is delimited. Disfluent speech never triggered it: the cleaner the
+    /// dictation, the more it reads as a prompt.
+    ///
+    /// It also bounds a second problem the app has by construction: dictated speech
+    /// is arbitrary text, and a user who dictates something shaped like an instruction
+    /// must still get it transformed, never obeyed.
+    /// Each pass names the artifact it receives, so the delimiter reads as a label
+    /// for the data rather than boilerplate.
+    public enum InputTag {
+        /// Pass 1 receives the raw transcript.
+        public static let transcript = "transcricao"
+        /// Pass 2 receives pass 1's marked output.
+        public static let annotated = "texto_anotado"
+    }
+
+    /// Wrap a pass's input in its delimiter, marking the turn as data to transform
+    /// rather than a request to answer.
+    static func delimited(_ input: String, tag: String) -> String {
+        "<\(tag)>\n\(input)\n</\(tag)>"
     }
 
     /// The subprocess environment: exactly the four variables every measurement in
@@ -128,11 +170,13 @@ public struct ClaudeOrganizer: Organizing {
     }
 
     public func annotate(_ transcript: String) async throws(OrganizationError) -> String {
-        try await run(prompt: pass1Prompt, input: transcript, stage: .pass1)
+        try await run(
+            prompt: pass1Prompt, input: transcript, tag: InputTag.transcript, stage: .pass1)
     }
 
     public func rewrite(_ annotated: String) async throws(OrganizationError) -> String {
-        try await run(prompt: pass2Prompt, input: annotated, stage: .pass2)
+        try await run(
+            prompt: pass2Prompt, input: annotated, tag: InputTag.annotated, stage: .pass2)
     }
 
     /// Run one pass: launch `claude`, feed `input` on stdin, await exit, and gate the
@@ -140,14 +184,16 @@ public struct ClaudeOrganizer: Organizing {
     /// seconds long, and with no built-in timeout on a dead network) never blocks it,
     /// and is killed if the enclosing task is cancelled — the manual "stop" and the
     /// graceful quit are the answer to that hang, not an app-imposed timeout.
-    private func run(prompt: String, input: String, stage: Stage) async throws(OrganizationError) -> String {
+    private func run(
+        prompt: String, input: String, tag: String, stage: Stage
+    ) async throws(OrganizationError) -> String {
         let environment = Self.environment(base: ProcessInfo.processInfo.environment)
         let arguments = Self.arguments(systemPrompt: prompt)
         let result: SubprocessResult
         do {
-            result = try await runSubprocess(
+            result = try await runner.run(
                 executable: claude, arguments: arguments, environment: environment,
-                stdin: Data(input.utf8))
+                stdin: Data(Self.delimited(input, tag: tag).utf8))
         } catch {
             throw OrganizationError.failed(stage: stage, reason: .missingBinary, detail: "\(error)")
         }
