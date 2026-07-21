@@ -112,11 +112,11 @@ private final class Clock: @unchecked Sendable {
         #expect(items[0].state == .recording)
     }
 
-    @Test("toggle from idle starts recording")
-    func toggleStarts() throws {
+    @Test("a start gesture from idle starts recording")
+    func startGestureStarts() throws {
         defer { cleanup() }
         let coordinator = makeCoordinator()
-        coordinator.toggle()
+        coordinator.handle(.start)
         #expect(coordinator.isRecording)
         #expect(try store.list().count == 1)
     }
@@ -139,7 +139,7 @@ private final class Clock: @unchecked Sendable {
         let coordinator = makeCoordinator()
         recorder.captureDuration = 8.0
         coordinator.start()
-        await coordinator.stop()
+        await coordinator.stop(mode: .braindump)
 
         #expect(!coordinator.isRecording)
         let items = try store.list()
@@ -160,7 +160,7 @@ private final class Clock: @unchecked Sendable {
         coordinator.onQueued = { queued.append($0) }
         recorder.captureDuration = 8.0
         coordinator.start()
-        await coordinator.stop()
+        await coordinator.stop(mode: .braindump)
 
         let items = try store.list()
         #expect(queued == [items[0].id])
@@ -175,12 +175,12 @@ private final class Clock: @unchecked Sendable {
         // Too short: discarded, no handoff.
         recorder.captureDuration = 0.1
         coordinator.start()
-        await coordinator.stop()
+        await coordinator.stop(mode: .braindump)
         // Long but silent: discarded too, no handoff.
         recorder.captureDuration = 8.0
         recorder.captureEnergies = Array(repeating: 0.0, count: 400)
         coordinator.start()
-        await coordinator.stop()
+        await coordinator.stop(mode: .braindump)
 
         #expect(queued.isEmpty)
     }
@@ -192,7 +192,7 @@ private final class Clock: @unchecked Sendable {
         defer { cleanup() }
         let coordinator = makeCoordinator()
         coordinator.start()
-        await coordinator.stop()  // item 1 -> queued
+        await coordinator.stop(mode: .braindump)  // item 1 -> queued
         #expect(!coordinator.isRecording)
 
         coordinator.start()  // a new recording, unblocked by the queued item
@@ -211,7 +211,7 @@ private final class Clock: @unchecked Sendable {
         let coordinator = makeCoordinator()
         recorder.captureDuration = 0.2
         coordinator.start()
-        await coordinator.stop()
+        await coordinator.stop(mode: .braindump)
         #expect(try store.list().isEmpty)
         #expect(!FileManager.default.fileExists(atPath: recorder.lastWav!.path))
     }
@@ -227,7 +227,7 @@ private final class Clock: @unchecked Sendable {
             recorder.captureDuration = duration
             recorder.captureEnergies = Array(repeating: 0.0004, count: Int(duration / 0.02))
             coordinator.start()
-            await coordinator.stop()
+            await coordinator.stop(mode: .braindump)
             #expect(try store.list().isEmpty)
             #expect(!FileManager.default.fileExists(atPath: recorder.lastWav!.path))
         }
@@ -244,8 +244,61 @@ private final class Clock: @unchecked Sendable {
         recorder.captureDuration = 8.0
         recorder.captureEnergies = energies
         coordinator.start()
-        await coordinator.stop()
+        await coordinator.stop(mode: .braindump)
         #expect(try store.list().isEmpty)
+    }
+
+    // MARK: - The mode the gesture earned (#42)
+
+    @Test("the gesture's mode is what the item is recorded as, settled at the end")
+    func stopStampsTheMode() async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        recorder.captureDuration = 2.0
+        coordinator.start()
+        // Mid-recording the item is unlabeled — a braindump, the default — because the
+        // hold that decides it has not happened yet.
+        #expect(try store.list()[0].meta.mode == .braindump)
+
+        await coordinator.stop(mode: .dictation)
+
+        let items = try store.list()
+        #expect(items[0].state == .queued)
+        #expect(items[0].meta.mode == .dictation)
+    }
+
+    @Test("a dictation just over its floor survives the same clip a braindump discards")
+    func perModeDurationFloor() async throws {
+        defer { cleanup() }
+        // 400 ms of speech: `manda`, `commita`. Held, it is the mode's whole point;
+        // toggled, it is a fat-fingered double-tap and leaves nothing behind.
+        recorder.captureDuration = 0.4
+        recorder.captureEnergies = Array(repeating: 0.09, count: 20)
+
+        let dictating = makeCoordinator()
+        dictating.start()
+        await dictating.stop(mode: .dictation)
+        let dictations = try store.list()
+        #expect(dictations.count == 1)
+        #expect(dictations[0].state == .queued)
+        #expect(dictations[0].meta.mode == .dictation)
+
+        let braindumping = makeCoordinator()
+        braindumping.start()
+        await braindumping.stop(mode: .braindump)
+        #expect(try store.list().count == 1)  // nothing new survived
+    }
+
+    @Test("a stop gesture runs the whole stop, mode included")
+    func stopGestureCarriesTheMode() async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        recorder.captureDuration = 2.0
+        coordinator.start()
+        coordinator.handle(.stop(.dictation))
+        let store = self.store
+        try await waitUntil { (try? store.list().first?.state) == .queued }
+        #expect(try store.list()[0].meta.mode == .dictation)
     }
 
     // MARK: - Encode failure
@@ -255,7 +308,7 @@ private final class Clock: @unchecked Sendable {
         defer { cleanup() }
         let coordinator = makeCoordinator(encoder: StubEncoder(shouldFail: true))
         coordinator.start()
-        await coordinator.stop()
+        await coordinator.stop(mode: .braindump)
         let items = try store.list()
         #expect(items[0].state == .failed)
         #expect(items[0].meta.error?.reason == .cliError)
@@ -307,7 +360,7 @@ private final class Clock: @unchecked Sendable {
         defer { cleanup() }
         let coordinator = makeCoordinator()
         coordinator.start()
-        await coordinator.stop()
+        await coordinator.stop(mode: .braindump)
         #expect(microphone.queryCount == 1)
 
         // Muted between the two gestures: the second recording must catch it.
@@ -340,7 +393,7 @@ private final class Clock: @unchecked Sendable {
     func stopWhenIdleNoOp() async throws {
         defer { cleanup() }
         let coordinator = makeCoordinator()
-        await coordinator.stop()
+        await coordinator.stop(mode: .braindump)
         #expect(recorder.stopCount == 0)
         #expect(try store.list().isEmpty)
     }

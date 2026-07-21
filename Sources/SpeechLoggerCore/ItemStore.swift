@@ -90,9 +90,20 @@ public struct ItemStore: Sendable {
 
     // MARK: - Transitions
 
-    /// Recording finished: move to `queued` and stamp the recording `duration`.
-    public func markQueued(_ id: String, duration: TimeInterval) throws(StoreError) -> ItemMeta {
-        try persist(try meta(for: id).advancing(to: .queued, at: now(), duration: duration), for: id)
+    /// Recording finished: move to `queued`, stamp the recording `duration`, and
+    /// settle the `mode`.
+    ///
+    /// The mode is stamped *here*, and not only at `create`, because the gesture does
+    /// not settle it until the end: recording starts on tap 2 in both modes and the
+    /// hold is what labels it, so an item is born a braindump and earns its dictation
+    /// label on the way out of the mic (#42). `nil` keeps whatever the item has, which
+    /// is what every caller that already knows the mode wants.
+    public func markQueued(
+        _ id: String, duration: TimeInterval, mode: ItemMode? = nil
+    ) throws(StoreError) -> ItemMeta {
+        let advanced = try meta(for: id).advancing(to: .queued, at: now(), duration: duration)
+        let next = mode.map { advanced.labelled(as: $0) } ?? advanced
+        return try persist(next, for: id)
     }
 
     /// The transcription lane picked the item up: move to `transcribing`.

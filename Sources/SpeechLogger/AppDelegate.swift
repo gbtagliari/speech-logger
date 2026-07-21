@@ -86,6 +86,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onStateChange: { [weak self] in Task { @MainActor in self?.refresh() } },
             onTranscribed: { [weak organizationLane] id in
                 Task { await organizationLane?.organize(id) }
+            },
+            // Dictation's delivery, and for now the whole of it: the raw transcript
+            // goes to the clipboard on every dictation, always, and is never restored
+            // (#42). Burning the clipboard is the accepted cost of the mode.
+            onDictationReady: { [weak self] transcript in
+                Task { @MainActor in self?.copyToClipboard(transcript) }
             })
         self.transcriptionLane = lane
 
@@ -117,7 +123,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.onStateChange = { [weak self] in self?.refresh() }
         self.pipelineController = controller
 
-        let hotkeyMonitor = HotkeyMonitor(onToggle: { [weak coordinator] in coordinator?.toggle() })
+        let hotkeyMonitor = HotkeyMonitor(
+            isRecording: { [weak coordinator] in coordinator?.isRecording ?? false },
+            onGesture: { [weak coordinator] gesture in coordinator?.handle(gesture) })
         self.hotkeyMonitor = hotkeyMonitor
 
         installHotkey()
@@ -262,6 +270,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             log.error("copy requested for \(id, privacy: .public) with no final text")
             return
         }
+        copyToClipboard(text)
+    }
+
+    /// Put text on the general pasteboard, replacing whatever was there. The single
+    /// clipboard write: the panel's copy and a finished dictation both land here.
+    private func copyToClipboard(_ text: String) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)

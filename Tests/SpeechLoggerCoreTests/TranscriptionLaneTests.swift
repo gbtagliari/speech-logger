@@ -82,6 +82,73 @@ struct TranscriptionLaneTests {
         #expect(collector.transcribed.isEmpty)
     }
 
+    // MARK: - Dictation delivery and the zero-LLM property (#42)
+
+    @Test("a finished dictation hands its transcript to delivery")
+    func dictationDeliversItsTranscript() async throws {
+        let store = try makeStore()
+        let id = try queuedItem(in: store, mode: .dictation)
+        let collector = Collector()
+        let lane = TranscriptionLane(
+            store: store,
+            transcriber: FakeTranscriber(log: CallLog(), writesOutput: true),
+            onDictationReady: { collector.addDelivered($0) })
+
+        await lane.enqueue(id)
+        await lane.waitUntilIdle()
+
+        // The text itself, not the id: the clipboard write is the mode's whole output,
+        // and it happens on every dictation without anyone clicking anything.
+        #expect(collector.delivered == ["raw transcript"])
+        #expect(try store.meta(for: id).state == .transcribed)
+    }
+
+    @Test("a braindump delivers nothing: it is collected from the panel, never pushed")
+    func braindumpDeliversNothing() async throws {
+        let store = try makeStore()
+        let id = try queuedItem(in: store)
+        let collector = Collector()
+        let lane = TranscriptionLane(
+            store: store,
+            transcriber: FakeTranscriber(log: CallLog(), writesOutput: true),
+            onDictationReady: { collector.addDelivered($0) })
+
+        await lane.enqueue(id)
+        await lane.waitUntilIdle()
+
+        #expect(collector.delivered.isEmpty)
+    }
+
+    @Test("a dictation makes zero LLM invocations, with organization wired up and live")
+    func dictationInvokesNoLLM() async throws {
+        // The mode's defining property, asserted where an LLM would actually be
+        // called rather than inferred from the unfired handoff (#41 left this open).
+        // The braindump arm is not a bonus: without it, "zero invocations" would also
+        // pass on a spy nothing could ever reach.
+        let store = try makeStore()
+        let organizer = SpyOrganizer()
+        let organization = OrganizationLane(store: store, organizer: organizer)
+        let lane = TranscriptionLane(
+            store: store,
+            transcriber: FakeTranscriber(log: CallLog(), writesOutput: true),
+            onTranscribed: { id in Task { await organization.organize(id) } })
+
+        let dictation = try queuedItem(in: store, mode: .dictation)
+        await lane.enqueue(dictation)
+        await lane.waitUntilIdle()
+
+        #expect(try store.meta(for: dictation).state == .transcribed)
+        #expect(await organizer.invocations == 0)
+
+        let braindump = try queuedItem(in: store)
+        await lane.enqueue(braindump)
+        await lane.waitUntilIdle()
+        try await waitUntil { (try? store.meta(for: braindump).state) == .organized }
+
+        #expect(await organizer.invocations == 2)  // the same wiring does run both passes
+        #expect(await organizer.transcripts == ["raw transcript"])
+    }
+
     // MARK: - Serial FIFO
 
     @Test("three items transcribe in arrival order, one at a time (never two at once)")
@@ -300,15 +367,44 @@ private struct BlockingTranscriber: Transcribing {
     }
 }
 
+/// Counts LLM passes and keeps what each one was handed, so "a dictation makes zero
+/// LLM invocations" is asserted against the seam an LLM would be called through.
+private actor SpyOrganizer: Organizing {
+    private(set) var invocations = 0
+    private(set) var transcripts: [String] = []
+
+    func annotate(_ transcript: String) async throws(OrganizationError) -> String {
+        invocations += 1
+        transcripts.append(transcript)
+        return "<annotated>"
+    }
+
+    func rewrite(_ annotated: String) async throws(OrganizationError) -> String {
+        invocations += 1
+        return "final text"
+    }
+}
+
 /// A thread-safe sink for the lane's callbacks (they fire synchronously on the actor).
 private final class Collector: @unchecked Sendable {
     private let lock = NSLock()
     private var _transcribed: [String] = []
+    private var _delivered: [String] = []
     private var _stateChanges = 0
 
     func addTranscribed(_ id: String) {
         lock.lock(); defer { lock.unlock() }
         _transcribed.append(id)
+    }
+
+    func addDelivered(_ transcript: String) {
+        lock.lock(); defer { lock.unlock() }
+        _delivered.append(transcript)
+    }
+
+    var delivered: [String] {
+        lock.lock(); defer { lock.unlock() }
+        return _delivered
     }
 
     func bumpState() {

@@ -35,10 +35,21 @@ public enum GuardDecision: Sendable, Equatable {
 /// The thresholds err deliberately toward accepting. The error costs are asymmetric:
 /// a false "has speech" costs one hallucinated item the user sees and deletes, while
 /// a false "silent" deletes real speech invisibly.
+///
+/// The duration floor is **one value per mode**, because the same clip means opposite
+/// things in the two: a braindump is a thought being formed, so under a second it is
+/// an errant double-tap; a dictation is `manda` or `commita`, 400–700 ms of entirely
+/// legitimate speech, and holding it to the braindump floor would delete the mode's
+/// whole point (#42).
 public struct RecordingGuard: Sendable {
-    /// Recordings shorter than this are accidental taps. A deliberate thought runs
+    /// Braindumps shorter than this are accidental taps. A deliberate thought runs
     /// well over a second; an errant double-tap-to-start-then-stop is sub-second.
-    public let minimumDuration: TimeInterval
+    public let braindumpMinimumDuration: TimeInterval
+    /// Dictations shorter than this are accidental holds. It sits just above the mode
+    /// threshold `T` (250 ms), so a double-tap that crossed into dictation by accident
+    /// still dies here, while the shortest utterance anyone dictates on purpose lives.
+    /// The speech test is the second net either way.
+    public let dictationMinimumDuration: TimeInterval
     /// RMS amplitude (0…1) at or above which one ~20 ms window counts as loud.
     ///
     /// Measured, not assumed (`RecordedEnergy`): in a silent room the loudest window
@@ -63,21 +74,33 @@ public struct RecordingGuard: Sendable {
     public let minimumLoudFraction: Double
 
     public init(
-        minimumDuration: TimeInterval = 1.0,
+        braindumpMinimumDuration: TimeInterval = 1.0,
+        dictationMinimumDuration: TimeInterval = 0.35,
         loudWindowFloor: Float = 0.02,
         minimumLoudFraction: Double = 0.05
     ) {
-        self.minimumDuration = minimumDuration
+        self.braindumpMinimumDuration = braindumpMinimumDuration
+        self.dictationMinimumDuration = dictationMinimumDuration
         self.loudWindowFloor = loudWindowFloor
         self.minimumLoudFraction = minimumLoudFraction
     }
 
-    /// Decide the recording's fate from its duration and its per-window energies.
-    /// Duration is checked first, so a too-short tap reads as `discardTooShort`
-    /// whatever its energy — both verdicts discard, and the distinction is for the
-    /// reader, not for the outcome.
-    public func evaluate(duration: TimeInterval, windowEnergies: [Float]) -> GuardDecision {
-        guard duration >= minimumDuration else { return .discardTooShort }
+    /// The floor the gesture's mode earns.
+    public func minimumDuration(for mode: ItemMode) -> TimeInterval {
+        switch mode {
+        case .braindump: return braindumpMinimumDuration
+        case .dictation: return dictationMinimumDuration
+        }
+    }
+
+    /// Decide the recording's fate from its mode, its duration and its per-window
+    /// energies. Duration is checked first, so a too-short tap reads as
+    /// `discardTooShort` whatever its energy — both verdicts discard, and the
+    /// distinction is for the reader, not for the outcome.
+    public func evaluate(
+        mode: ItemMode, duration: TimeInterval, windowEnergies: [Float]
+    ) -> GuardDecision {
+        guard duration >= minimumDuration(for: mode) else { return .discardTooShort }
         // Measuring nothing is not measuring silence. An empty sequence means the
         // capture could not read the device's sample format at all, which says
         // nothing about whether the audio holds speech — and the audio itself may be

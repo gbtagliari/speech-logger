@@ -16,10 +16,14 @@ public protocol AudioEncoding: Sendable {
     func encode(wav: URL, to mp3: URL) async throws
 }
 
-/// Orchestrates one recording gesture end to end: hotkey toggle → capture → dual
-/// guard → encode → item lands `queued` (ADR-0006). Recording is exclusive, and the
-/// toggle's behavior depends only on whether the mic is currently live: a queued or
-/// processing item never holds up the next recording.
+/// Orchestrates one recording gesture end to end: hotkey gesture → capture → dual
+/// guard → encode → item lands `queued` (ADR-0006). Recording is exclusive, and a
+/// queued or processing item never holds up the next recording.
+///
+/// The gesture's *mode* arrives at the end, not the start (#42): both modes open the
+/// mic on tap 2 and only the hold tells them apart, so the label reaches this class
+/// on `stop(mode:)` and settles two things at once — which duration floor the guard
+/// applies, and what the item is recorded as.
 ///
 /// One thing does refuse a new recording, and only one: a microphone the device itself
 /// reports as unusable (#45). Nothing else — a missing binary, a denied notification, a
@@ -70,19 +74,23 @@ public protocol AudioEncoding: Sendable {
         self.microphone = microphone
     }
 
-    /// The hotkey. Start if idle, stop if recording — nothing else. Never blocked: a
-    /// press always reaches here, and the only thing that can turn it down is an
-    /// unusable microphone (see `start`).
-    public func toggle() {
-        if isRecording {
-            Task { await stop() }
-        } else {
-            start()
+    /// Act on a hotkey gesture (#42). The grammar has already decided what the gesture
+    /// means — including which mode a finished recording turned out to be — so this
+    /// only carries it out. Never blocked: a press always reaches here, and the only
+    /// thing that can turn it down is an unusable microphone (see `start`).
+    public func handle(_ gesture: HotkeyGesture) {
+        switch gesture {
+        case .start: start()
+        case .stop(let mode): Task { await stop(mode: mode) }
         }
     }
 
     /// Start a recording: check the microphone, create the item at `recording`, open
     /// the mic. A second call while already recording is a no-op (exclusive recording).
+    ///
+    /// The item is created **unlabeled** — a braindump, the default both on disk and
+    /// here — because the mode is not known yet and waiting for it would delay the
+    /// audio. The label is stamped when the recording stops (`stop(mode:)`).
     ///
     /// The device is queried here and not only at panel-open, because mute state
     /// changes in between and the start of a recording is the only instant that
@@ -116,15 +124,15 @@ public protocol AudioEncoding: Sendable {
         onStateChange?()
     }
 
-    /// Stop the current recording and run it through the guard and encoder. A call
-    /// while not recording is a no-op.
-    public func stop() async {
+    /// Stop the current recording and run it through the guard and encoder, under the
+    /// `mode` the gesture earned. A call while not recording is a no-op.
+    public func stop(mode: ItemMode) async {
         guard isRecording, let id = currentItemID else { return }
         isRecording = false
         currentItemID = nil
         let capture = recorder.stop()
         onStateChange?()  // mic is off; the glyph drops out of `recording`
-        await process(id: id, capture: capture)
+        await process(id: id, mode: mode, capture: capture)
     }
 
     /// Discard an in-progress recording silently (graceful quit, ADR-0006):
@@ -143,10 +151,11 @@ public protocol AudioEncoding: Sendable {
 
     /// Apply the dual guard, then encode-and-queue, discard, or fail. The temp wav
     /// is always removed on the way out — the mp3 is the retained artifact.
-    private func process(id: String, capture: RecordingCapture) async {
+    private func process(id: String, mode: ItemMode, capture: RecordingCapture) async {
         defer { try? FileManager.default.removeItem(at: capture.wav) }
 
-        switch guardCheck.evaluate(duration: capture.duration, windowEnergies: capture.windowEnergies) {
+        switch guardCheck.evaluate(
+            mode: mode, duration: capture.duration, windowEnergies: capture.windowEnergies) {
         case .discardTooShort, .discardSilent:
             // Nothing was said, or nothing was meant: either way it never becomes a
             // visible log item. A recording with no speech in it leaves nothing
@@ -158,7 +167,7 @@ public protocol AudioEncoding: Sendable {
             do {
                 let mp3 = try store.contentURL(of: ItemFile.audio, for: id)
                 try await encoder.encode(wav: capture.wav, to: mp3)
-                _ = try store.markQueued(id, duration: capture.duration)
+                _ = try store.markQueued(id, duration: capture.duration, mode: mode)
                 onQueued?(id)  // hand the item to the serial transcription lane
             } catch {
                 _ = try? store.fail(
