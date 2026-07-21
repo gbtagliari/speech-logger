@@ -4,9 +4,8 @@ The visual identity for **speech-logger**, a calm macOS menubar app that turns s
 organized text without changing what was said. This document is the source of truth for the
 mark, the color system, typography, and how the assets are wired into the app.
 
-> **Working title.** `speech-logger` is a working name, still open. The identity is
-> deliberately **name-agnostic**: the symbol carries the brand, so swapping the wordmark
-> later is cheap.
+> **Symbol-led identity.** The mark carries the brand on its own: it reads at menubar size
+> with no wordmark next to it, which is where the app actually lives.
 
 A browsable version of this guide is published as an Artifact:
 <https://claude.ai/code/artifact/ac12e0f8-1a9f-40d8-bba8-24bb2303a6b9>
@@ -100,6 +99,11 @@ deliberate choice, not a shortcut: the mark speaks the exact language the app dr
 
 - Horizontal lockup — app bars, headers: [`lockup-horizontal.svg`](svg/lockup-horizontal.svg)
 - Vertical lockup — about screens, splash: [`lockup-vertical.svg`](svg/lockup-vertical.svg)
+
+The lockups pin `color` to ink, so they need a light background. Where the background follows a
+theme the caller does not control (a README on github.com), pair the light file with
+[`lockup-horizontal-dark.svg`](svg/lockup-horizontal-dark.svg) — same geometry, ink and hyphen
+swapped for their dark tokens — behind a `<picture>` + `prefers-color-scheme` switch.
 
 Prefer the **symbol alone** wherever space is tight (menubar, favicon).
 
@@ -231,6 +235,7 @@ brand/
   svg/
     mark.svg                  ← primary symbol
     lockup-horizontal.svg
+    lockup-horizontal-dark.svg  ← ink-on-dark variant, for dark-theme READMEs
     lockup-vertical.svg
     app-icon.svg              ← app-icon source (squircle + white mark)
     state-idle.svg

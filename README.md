@@ -1,6 +1,7 @@
-# speech-logger
-
-_Working title. The name is an open question, not a decision._
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="brand/svg/lockup-horizontal-dark.svg">
+  <img src="brand/svg/lockup-horizontal.svg" width="320" alt="speech-logger">
+</picture>
 
 A macOS menubar app that turns speech into organized text.
 
@@ -26,6 +27,24 @@ never becomes "should not") survives intact.
 That fidelity contract is the whole product. Delivering it is what decided the two-pass
 architecture (ADR-0001), and it is enforced by an acceptance set of real recordings.
 
+## A personal project
+
+This is a personal project, built to study two things.
+
+The first is the product. [Wispr Flow](https://wisprflow.ai/) is the reference point: it types
+into your cursor as you speak, which is the right shape for a short instruction and the wrong
+one for thinking out loud. Braindump mode is the alternative — talk for five minutes, walk away,
+collect readable text later — and dictation mode is the concession that Flow's shape wins for
+the short case. Building it is how I find out whether that split actually holds up in daily use.
+
+The second is the workflow. The repo is run with
+[`mattpocock/skills`](https://github.com/mattpocock/skills), on the theory that a real project
+with real issues is the only honest way to test whether an agent-skill setup survives past the
+demo. The `docs/agents/` wiring, the triage labels, and the ADR discipline are part of that
+experiment, not just furniture.
+
+Neither makes this a product. See Contributions.
+
 ## Status
 
 Early implementation. The project scaffold builds and launches as a menubar app (issue #14);
@@ -50,6 +69,33 @@ scripts/verify-signing.sh            # assert sandbox-off + stable designated re
 
 The self-signed identity is what keeps the Input Monitoring grant alive across rebuilds; a
 local, non-quarantined build launches without notarization. See `docs/adr/` for the decisions.
+
+## Brand
+
+The mark is a **microphone capsule whose interior is three lines of organized text** — the
+product's promise in one drawing. It is single-color `currentColor`, so it inherits the menubar
+tint and survives to 16 px. Neutrals carry a slight indigo bias rather than being pure gray, and
+there is exactly **one** accent; the semantic colors are separate and map to real item states.
+
+| Token | Light | Dark |
+|---|---|---|
+| Indigo · accent | `#5257CE` | `#8B90F0` |
+| Indigo · deep | `#3C41B0` | — |
+| Ink | `#171922` | `#ECEDF4` |
+| Slate | `#656A7E` | `#9AA0B4` |
+| Hairline | `#E4E6EF` | `#2A2D3A` |
+| Paper | `#F5F6FA` | `#101119` |
+| Surface | `#FFFFFF` | `#191B25` |
+
+| Item state | Light | Dark |
+|---|---|---|
+| Recording | `#E5484D` | `#FF6166` |
+| Processing | `#5257CE` | `#8B90F0` |
+| Failed | `#D9820A` | `#F0A83A` |
+| Ready | `#2F9E68` | `#4FBF88` |
+
+Full system — menubar glyph family, lockups, app icon, typography, usage rules:
+[`brand/DESIGN_SYSTEM.md`](brand/DESIGN_SYSTEM.md).
 
 ## License
 
