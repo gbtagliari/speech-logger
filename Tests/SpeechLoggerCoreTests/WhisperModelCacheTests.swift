@@ -71,7 +71,7 @@ struct WhisperModelCacheTests {
     }
 
     /// An interrupted download leaves the tree without weights. Checking the directory
-    /// alone would call that a hit, and the first dictation would die `HF_HUB_OFFLINE`.
+    /// alone would call that a hit, and the first transcription would die `HF_HUB_OFFLINE`.
     @Test("a snapshot with no weights reads as not cached")
     func partialDownloadIsNotCached() throws {
         let hub = try HubFixture.makeTemporary(files: ["config.json"])

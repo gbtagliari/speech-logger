@@ -66,9 +66,9 @@ private final class ProcessHandle: @unchecked Sendable {
 /// Launch a binary by absolute path, await its exit, and return its status and
 /// captured output. **If the surrounding task is cancelled the process is sent
 /// SIGTERM** — this is the seam behind the manual "stop processing" control and the
-/// graceful quit (ADR-0006, SPEC "Storage and the item state machine"): the lanes
-/// run each item's shell-out in a task they can cancel, and cancelling it kills the
-/// long-running `mlx_whisper`/`claude` rather than waiting out its ~179 s hang.
+/// graceful quit (ADR-0006): the lanes run each item's shell-out in a task they can
+/// cancel, and cancelling it kills the long-running `mlx_whisper`/`claude` rather than
+/// waiting out its ~179 s hang.
 ///
 /// `stdout`/`stderr` are read once, after exit — the shell-out contracts keep both
 /// well under the pipe buffer (claude's JSON is ~2 KB; mlx_whisper's stdout is

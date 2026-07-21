@@ -17,7 +17,7 @@ interfere.
 
 A bought tool's post-processing is a single text box: one prompt, one model, one pass. It
 structurally cannot express annotate-then-rewrite. This capability gap is what decided build over
-buy (`PRD.md` §10).
+buy.
 
 ## Decision
 

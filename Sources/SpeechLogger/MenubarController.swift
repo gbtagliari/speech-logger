@@ -3,10 +3,10 @@ import SpeechLoggerCore
 import SwiftUI
 
 /// Owns the status item: renders the priority-ladder glyph plus, while recording, a
-/// running clock (SPEC "UI", stories 5, 6), and hangs the three-section panel off
-/// the button as an `NSPopover` hosting a SwiftUI `PanelView`. The glyph is one
-/// state (`MenubarState`); the panel is a `PanelModel`. `AppDelegate` pushes both on
-/// every app state change and wires the row actions through `viewModel`.
+/// running clock, and hangs the three-section panel off the button as an `NSPopover`
+/// hosting a SwiftUI `PanelView`. The glyph is one state (`MenubarState`); the panel
+/// is a `PanelModel`. `AppDelegate` pushes both on every app state change and wires
+/// the row actions through `viewModel`.
 @MainActor final class MenubarController {
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
@@ -18,7 +18,7 @@ import SwiftUI
     private var recordingSeconds = 0
 
     /// Called just before the panel opens, so the app can refresh the item list and
-    /// re-check permission (SPEC: preflight re-checks on panel-open).
+    /// re-check permission: preflight re-checks on panel-open.
     var onPanelWillOpen: (() -> Void)?
 
     init() {
@@ -45,8 +45,8 @@ import SwiftUI
         render()
     }
 
-    /// Push a fresh panel model into the view (SPEC "UI"). `preflight` drives the
-    /// degraded banner shown inside the panel: one line per failing prerequisite.
+    /// Push a fresh panel model into the view. `preflight` drives the degraded banner
+    /// shown inside the panel: one line per failing prerequisite.
     func updatePanel(_ model: PanelModel, preflight: PreflightReport) {
         viewModel.model = model
         viewModel.preflight = preflight

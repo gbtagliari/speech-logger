@@ -1,13 +1,13 @@
 import Foundation
 
 /// What the single menubar glyph shows. A strict priority ladder, one state wins
-/// (ADR-0006, SPEC "UI"). The icon reflects app status; it does **not** signal
-/// "ready" (that is the notification's job).
+/// (ADR-0006). The icon reflects app status; it does **not** signal "ready" (that is
+/// the notification's job).
 public enum MenubarState: Sendable, Equatable {
     /// The mic is live. Highest priority — recording always owns the glyph.
     case recording
     /// At least one item is `failed`, or a preflight prerequisite is missing.
-    /// Persistent and easy to miss, so it outranks live processing (story 36).
+    /// Persistent and easy to miss, so it outranks live processing.
     case failed
     /// Input Monitoring is not granted: the hotkey is deaf until it is fixed. Shown
     /// only when not recording/failed, so it never masks live work.
@@ -43,9 +43,9 @@ public enum MenubarState: Sendable, Equatable {
     /// Convenience: derive the item-driven flags from a list of items and the two
     /// preflight tiers from the launch report, then resolve.
     ///
-    /// A missing prerequisite folds into `failed` — the aggregate tier the SPEC asks
-    /// for — while a denied Input Monitoring keeps its own `needsPermission` glyph: it
-    /// is the one failure that silences the hotkey, and it says so with a lock.
+    /// A missing prerequisite folds into `failed`, the aggregate tier, while a denied
+    /// Input Monitoring keeps its own `needsPermission` glyph: it is the one failure
+    /// that silences the hotkey, and it says so with a lock.
     public static func resolve(
         items: [Item],
         isRecording: Bool,

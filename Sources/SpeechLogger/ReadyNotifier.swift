@@ -4,7 +4,7 @@ import os
 
 /// Raises the ready signal: one macOS notification per `organized` item, carrying a
 /// `Copiar` that puts the final pass-2 text on the clipboard straight from the banner
-/// and a `Dispensar` alongside (SPEC "UI", stories 21, 27). It never opens the app.
+/// and a `Dispensar` alongside. It never opens the app.
 ///
 /// The thin `UserNotifications` wiring around `ReadyNotification`, which decides what
 /// the banner says. Local notifications need no entitlement — only the user's
@@ -72,8 +72,8 @@ final class ReadyNotifier: NSObject {
     }
 
     /// Post the ready banner for one organized item, once per item and never batched
-    /// with another (story 27). One-per-item is the organization lane's doing — it
-    /// fires `onOrganized` only on the `markOrganized` transition, and `organized` is
+    /// with another. One-per-item is the organization lane's doing — it fires
+    /// `onOrganized` only on the `markOrganized` transition, and `organized` is
     /// terminal, so no retry re-enters it. Using the item id as the request identifier
     /// is the belt to that braces: were it ever to fire twice, the second post would
     /// replace the first banner in place instead of stacking a duplicate.
@@ -119,9 +119,9 @@ extension ReadyNotifier: UNUserNotificationCenterDelegate {
     /// Route a tapped button. `Copiar` copies; `Dispensar` and a tap on the banner
     /// body (the default action) do nothing.
     ///
-    /// "Never opens the app" (SPEC "UI") is not enforceable from here: the system
-    /// activates the app on the default action *before* this is called, and no
-    /// category option suppresses that. What makes it true is `LSUIElement` — an
+    /// "Never opens the app" is not enforceable from here: the system activates the
+    /// app on the default action *before* this is called, and no category option
+    /// suppresses that. What makes it true is `LSUIElement` — an
     /// accessory app has no window to open, so an activation is invisible. Keeping the
     /// body tap a no-op is the other half: it is never a way in.
     nonisolated func userNotificationCenter(

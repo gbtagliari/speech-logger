@@ -3,7 +3,7 @@ import Testing
 
 @testable import SpeechLoggerCore
 
-/// The panel is three sections built purely from the item list (SPEC "UI"):
+/// The panel is three sections built purely from the item list:
 /// *Acontecendo agora* (recording + queued/transcribing/organizing), *Prontos*
 /// (organized, clamped preview, newest first), *Precisam de você* (failed +
 /// cancelled, with retry only where there is something to resume).

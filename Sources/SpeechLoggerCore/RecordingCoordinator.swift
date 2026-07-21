@@ -1,7 +1,7 @@
 import Foundation
 
 /// What a finished recording produced: the temp wav plus the two measurements the
-/// dual guard needs. The wav is deleted once the mp3 exists (SPEC "The pipeline").
+/// dual guard needs. The wav is deleted once the mp3 exists.
 public struct RecordingCapture: Sendable, Equatable {
     /// The native wav streamed to a temp file during capture.
     public let wav: URL
@@ -34,9 +34,9 @@ public protocol AudioEncoding: Sendable {
 }
 
 /// Orchestrates one recording gesture end to end: hotkey toggle → capture → dual
-/// guard → encode → item lands `queued` (ADR-0006, SPEC "The pipeline"). Recording
-/// is exclusive and the hotkey never refuses a new one — the toggle's behavior
-/// depends only on whether the mic is currently live.
+/// guard → encode → item lands `queued` (ADR-0006). Recording is exclusive and the
+/// hotkey never refuses a new one — the toggle's behavior depends only on whether the
+/// mic is currently live.
 ///
 /// Foundation-only and `@MainActor`, with the hardware seams injected, so the whole
 /// flow is unit-testable against a real store on a temp directory.
@@ -116,7 +116,7 @@ public protocol AudioEncoding: Sendable {
         await process(id: id, capture: capture)
     }
 
-    /// Discard an in-progress recording silently (graceful quit, story 35 / ADR-0006):
+    /// Discard an in-progress recording silently (graceful quit, ADR-0006):
     /// stop the mic, throw the capture away, and hard-remove the item. A recording has
     /// nothing to resume, so it leaves no `cancelled` off-ramp and no Trash entry —
     /// just as a too-short tap does. A call while not recording is a no-op.
@@ -137,10 +137,10 @@ public protocol AudioEncoding: Sendable {
 
         switch guardCheck.evaluate(duration: capture.duration, peak: capture.peak) {
         case .discardTooShort:
-            // An accidental tap: it never becomes a visible log item (story 32).
+            // An accidental tap: it never becomes a visible log item.
             try? store.discard(id)
         case .rejectSilent:
-            // Long enough but silent: fail cleanly rather than hallucinate (story 33).
+            // Long enough but silent: fail cleanly rather than hallucinate.
             _ = try? store.fail(id, stage: .recording, reason: .noSpeech, detail: "silent recording")
         case .accept:
             do {

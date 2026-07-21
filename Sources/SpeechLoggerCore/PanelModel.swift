@@ -1,8 +1,8 @@
 import Foundation
 
-/// The menubar panel as a pure value, built from the item list (SPEC "UI"). Three
-/// sections mirror the panel's three headings, so the SwiftUI view is a thin render
-/// of this model and the sectioning/ordering/labelling logic stays testable here.
+/// The menubar panel as a pure value, built from the item list. Three sections mirror
+/// the panel's three headings, so the SwiftUI view is a thin render of this model and
+/// the sectioning/ordering/labelling logic stays testable here.
 ///
 /// - *Acontecendo agora* (`live`): the recording clock plus queued / transcribing /
 ///   organizing, newest first, making the lane model the hero.

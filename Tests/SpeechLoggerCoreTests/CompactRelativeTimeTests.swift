@@ -4,7 +4,7 @@ import Testing
 @testable import SpeechLoggerCore
 
 /// The panel's compact "how long ago" stamp, pt-BR and terse to fit a row's right
-/// edge (SPEC "UI", story 23: tell items apart at a glance).
+/// edge, so items are told apart at a glance.
 struct CompactRelativeTimeTests {
     private let now = Date(timeIntervalSince1970: 1_000_000)
 

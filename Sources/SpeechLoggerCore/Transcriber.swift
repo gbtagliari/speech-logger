@@ -78,7 +78,7 @@ public struct Transcriber: Transcribing {
         ]
     }
 
-    /// The subprocess environment: `HF_HUB_OFFLINE=1` so a dictation never stalls on
+    /// The subprocess environment: `HF_HUB_OFFLINE=1` so a transcription never stalls on
     /// the network (the model is preflight-downloaded), and `ffmpegDir` prepended to
     /// `PATH` so `mlx_whisper` can find `ffmpeg` under a GUI-launched app's bare env.
     public static func environment(base: [String: String], ffmpegDir: String) -> [String: String] {

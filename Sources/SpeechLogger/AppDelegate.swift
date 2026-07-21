@@ -19,8 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkeyMonitor: HotkeyMonitor?
     private var menubar: MenubarController?
     private var readyNotifier: ReadyNotifier?
-    /// The prerequisite check (SPEC "First-run preflight"): read at launch, re-read on
-    /// focus and panel-open. It reports; it never gates the hotkey.
+    /// The prerequisite check: read at launch, re-read on focus and panel-open. It
+    /// reports; it never gates the hotkey.
     private var preflight = PreflightReport.satisfied
     /// Set once the graceful-quit sweep is running, so a re-entrant terminate request
     /// falls straight through instead of starting a second sweep.
@@ -44,8 +44,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menubar = MenubarController()
-        // Panel-open is one of preflight's two re-check moments (SPEC): the panel is
-        // where the failures are read, so it must not show a stale one.
+        // Panel-open is one of preflight's two re-check moments: the panel is where
+        // the failures are read, so it must not show a stale one.
         menubar.onPanelWillOpen = { [weak self] in self?.refreshPreflight() }
         menubar.viewModel.onOpenSettings = { InputMonitoring.openSettings() }
         menubar.viewModel.onDownloadModel = { [weak self] in self?.downloadWhisperModel() }
@@ -58,10 +58,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menubar.viewModel.onOpenFolder = { [weak self] id in self?.openFolder(of: id) }
         self.menubar = menubar
 
-        // The ready signal (stories 21, 27): one notification per organized item, with
-        // a `Copiar` that copies straight from the banner. Authorization is asked for
-        // at launch so the first ready item is not lost to a pending prompt; a denial
-        // degrades to the panel and never blocks the pipeline.
+        // The ready signal: one notification per organized item, with a `Copiar` that
+        // copies straight from the banner. Authorization is asked for at launch so the
+        // first ready item is not lost to a pending prompt; a denial degrades to the
+        // panel and never blocks the pipeline.
         let readyNotifier = ReadyNotifier()
         readyNotifier.onCopy = { [weak self] id in self?.copyFinalText(of: id) }
         readyNotifier.requestAuthorization()
@@ -114,9 +114,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshPreflight()
     }
 
-    /// Graceful quit that never blocks (story 35, ADR-0006). Defer termination just
-    /// long enough for the controller to discard an in-progress recording and mark
-    /// in-flight processing `cancelled` (durable store writes) and to send each
+    /// Graceful quit that never blocks (ADR-0006). Defer termination just long enough
+    /// for the controller to discard an in-progress recording and mark in-flight
+    /// processing `cancelled` (durable store writes) and to send each
     /// subprocess SIGTERM — it does *not* wait for the processes to die, so the user is
     /// never blocked. A re-entrant request (or no controller yet) terminates at once.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -133,8 +133,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyMonitor?.stop()
     }
 
-    /// Focus is preflight's other re-check moment (SPEC): the user leaves to install a
-    /// binary or flip the Settings toggle and comes back, and the report must follow.
+    /// Focus is preflight's other re-check moment: the user leaves to install a binary
+    /// or flip the Settings toggle and comes back, and the report must follow.
     ///
     /// The Input Monitoring grant is the one check that will not move here — it is a
     /// launch-time read, so a fresh grant needs a relaunch (ADR-0005) — but the retry
@@ -157,23 +157,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Re-read the prerequisites and push the result to the menubar. Cheap (five
     /// `stat`s and a `CGPreflightListenEventAccess()`), so it can ride the launch,
-    /// focus and panel-open moments the SPEC asks for.
+    /// focus and panel-open moments alike.
     ///
     /// Nothing here gates recording: a prerequisite missing at capture time still
     /// records, and the item lands as a retryable `failed`/`missing_binary` from the
-    /// lane that hits it (story 40).
+    /// lane that hits it.
     private func refreshPreflight() {
         preflight = Preflight.run(inputMonitoringGranted: InputMonitoring.isGranted)
         refresh()
     }
 
-    /// Download the Whisper model — the one prerequisite preflight fixes (story 39),
-    /// on the user's click. Long (~1.5 GB) and nothing waits on it: the panel shows it
+    /// Download the Whisper model — the one prerequisite preflight fixes — on the
+    /// user's click. Long (~1.5 GB) and nothing waits on it: the panel shows it
     /// running, and the re-check afterwards is what clears the banner.
     ///
-    /// A failure is told, not swallowed (story 37): the banner keeps the click and
-    /// gains the reason, while the stderr tail behind it goes to the log. The report
-    /// itself stays red either way, since only the cache can turn it green.
+    /// A failure is told, not swallowed: the banner keeps the click and gains the
+    /// reason, while the stderr tail behind it goes to the log. The report itself
+    /// stays red either way, since only the cache can turn it green.
     private func downloadWhisperModel() {
         guard let menubar, !menubar.viewModel.isDownloadingModel else { return }
         menubar.viewModel.isDownloadingModel = true
@@ -218,8 +218,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menubar?.updatePanel(model, preflight: preflight)
     }
 
-    /// Raise the ready notification for a just-organized item (stories 21, 27). Fired
-    /// once per item by the organization lane, on reaching `organized`.
+    /// Raise the ready notification for a just-organized item. Fired once per item by
+    /// the organization lane, on reaching `organized`.
     ///
     /// An unreadable final text still notifies (on the fallback body): the read is the
     /// banner's preview, not its purpose, and losing the ready signal over it would
@@ -240,8 +240,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         readyNotifier.notifyReady(id: id, finalText: preview)
     }
 
-    /// Copy an organized item's final pass-2 text to the clipboard (story 22). Only
-    /// `organized` items return text, so nothing partial is ever copyable as final.
+    /// Copy an organized item's final pass-2 text to the clipboard. Only `organized`
+    /// items return text, so nothing partial is ever copyable as final.
     private func copyFinalText(of id: String) {
         guard let text = try? store?.finalText(for: id) else {
             log.error("copy requested for \(id, privacy: .public) with no final text")
@@ -252,7 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pasteboard.setString(text, forType: .string)
     }
 
-    /// Send an item to the macOS Trash (stories 25, 26), then refresh the panel.
+    /// Send an item to the macOS Trash, then refresh the panel.
     private func deleteItem(_ id: String) {
         do {
             try store?.delete(id)
@@ -262,15 +262,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refresh()
     }
 
-    /// Re-run an item whole, from its audio (story 41, #24), after confirming.
+    /// Re-run an item whole, from its audio (#24), after confirming.
     ///
     /// The confirmation is asked for the one reason a modal earns its place here: the
-    /// click is not undoable. (The SPEC's modal prohibitions are about reporting a
-    /// missing permission or prerequisite, which must degrade instead — they do not
-    /// cover a destructive action, and this is the app's only one.) The current text is
-    /// discarded the moment the item leaves `organized`, the re-run
-    /// takes a transcription and two passes to produce a replacement, and that
-    /// replacement can land wrong too — which is the whole reason the user is here.
+    /// click is not undoable. (Modals are otherwise ruled out for reporting a missing
+    /// permission or prerequisite, which must degrade instead — that does not cover a
+    /// destructive action, and this is the app's only one.) The current text is
+    /// discarded the moment the item leaves `organized`, the re-run takes a
+    /// transcription and two passes to produce a replacement, and that replacement can
+    /// land wrong too — which is the whole reason the user is here.
     /// Delete needs no prompt because delete goes to the Trash; this has no Trash.
     ///
     /// Deferred one runloop turn because of where the click comes from: the panel is a

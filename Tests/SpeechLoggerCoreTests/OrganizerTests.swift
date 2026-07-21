@@ -34,7 +34,7 @@ struct OrganizerTests {
     @Test("the transcript is never in the argv — it goes on stdin, out of `ps` and into the cache")
     func argvHasNoTranscript() {
         let argv = ClaudeOrganizer.arguments(systemPrompt: "SYS")
-        // Only the prompt rides in argv; the private dictation must not.
+        // Only the prompt rides in argv; the private transcript must not.
         #expect(!argv.contains { $0.contains("TRANSCRIPT_MARKER") })
         #expect(argv.filter { $0 == "SYS" }.count == 1)
     }

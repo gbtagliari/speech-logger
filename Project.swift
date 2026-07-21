@@ -49,7 +49,7 @@ let project = Project(
                 // Input Monitoring (the hotkey) has no usage-description key; it is
                 // gated at runtime via CGPreflightListenEventAccess (ADR-0004).
                 "NSMicrophoneUsageDescription":
-                    "speech logger records your dictation to transcribe it locally.",
+                    "speech logger records your speech to transcribe it locally.",
             ]),
             sources: ["Sources/SpeechLogger/**"],
             // Asset catalog holding the app icon (AppIcon.appiconset).

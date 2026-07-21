@@ -11,8 +11,6 @@ This repo is **single-context**: one `CONTEXT.md` and one `docs/adr/` at the roo
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
 
-Neither exists yet. `PRD.md` and the closed wayfinder map in `.scratch/dictation-tool/` are the current sources of domain language.
-
 ## File structure
 
 ```

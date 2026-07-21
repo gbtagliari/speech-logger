@@ -48,8 +48,8 @@ struct FidelityCheck: Sendable {
 /// Judges a candidate against the fidelity contract by its four checks
 /// (`.scratch/dictation-tool/assets/fidelity-contract.md`, "How to test an output").
 /// Deterministic and offline — the app never judges fidelity at runtime; this is the
-/// developer-run regression yardstick (SPEC "Testing Decisions"). The checks are
-/// intentionally invariant-based, not exact-match, so a faithful-but-differently-worded
+/// developer-run regression yardstick. The checks are intentionally invariant-based,
+/// not exact-match, so a faithful-but-differently-worded
 /// rewrite passes while the documented failure modes (summarizing, inserting a
 /// weighted word, downgrading a modal, repairing ASR noise) fail.
 enum FidelityJudge {

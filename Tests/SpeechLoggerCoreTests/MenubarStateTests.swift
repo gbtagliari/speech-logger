@@ -89,8 +89,8 @@ struct MenubarStateTests {
 
     // MARK: - Preflight tiers
 
-    /// SPEC "First-run preflight": failures surface as the aggregate `failed` icon
-    /// tier. With no items at all, a missing binary is what raises it.
+    /// Preflight failures surface as the aggregate `failed` icon tier. With no items
+    /// at all, a missing binary is what raises it.
     @Test(
         "a missing prerequisite raises the failed glyph with no items in the log",
         arguments: [PreflightCheck.mlxWhisper, .ffmpeg, .claude, .claudeLogin, .whisperModel])

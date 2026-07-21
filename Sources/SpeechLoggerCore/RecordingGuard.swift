@@ -1,14 +1,14 @@
 import Foundation
 
-/// The dual guard's verdict on a finished recording (SPEC "The pipeline").
+/// The dual guard's verdict on a finished recording.
 public enum GuardDecision: Sendable, Equatable {
     /// Long enough and loud enough: encode it and queue it.
     case accept
-    /// Below the minimum duration: an accidental tap. Discard silently (story 32) —
-    /// it never becomes a log item, so a fat-fingered double-tap does not litter.
+    /// Below the minimum duration: an accidental tap. Discard silently: it never
+    /// becomes a log item, so a fat-fingered double-tap does not litter.
     case discardTooShort
-    /// Long enough but essentially silent: fail `no_speech` (story 33), so an empty
-    /// recording does not sail into `mlx_whisper` and come back a hallucination.
+    /// Long enough but essentially silent: fail `no_speech`, so an empty recording
+    /// does not sail into `mlx_whisper` and come back a hallucination.
     case rejectSilent
 }
 

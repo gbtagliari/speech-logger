@@ -2,10 +2,10 @@ import Foundation
 import SpeechLoggerCore
 
 /// The acceptance set as test fixtures: the four cases, their transcripts, and the
-/// gate for the developer-run harness (issue #18, SPEC "Testing Decisions"). The
-/// recordings and their transcripts live in `.scratch/` (gitignored — personal
-/// audio), so the harness is guarded on their presence, exactly like the #17
-/// transcription end-to-end tests. Case 01 is typed, so its transcript is inline.
+/// gate for the developer-run harness (issue #18). The recordings and their
+/// transcripts live in `.scratch/` (gitignored — personal audio), so the harness is
+/// guarded on their presence, exactly like the #17 transcription end-to-end tests.
+/// Case 01 is typed, so its transcript is inline.
 enum AcceptanceFixtures {
     /// The harness runs the real two-pass pipeline, so it needs `claude`, live
     /// credentials, and the three recorded transcripts. Absent any of them, the
