@@ -48,6 +48,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the failures are read, so it must not show a stale one.
         menubar.onPanelWillOpen = { [weak self] in self?.refreshPreflight() }
         menubar.viewModel.onOpenSettings = { InputMonitoring.openSettings() }
+        menubar.viewModel.onOpenMicrophoneSettings = { Microphone.openPrivacySettings() }
+        menubar.viewModel.onOpenSoundSettings = { Microphone.openSoundSettings() }
         menubar.viewModel.onDownloadModel = { [weak self] in self?.downloadWhisperModel() }
         menubar.viewModel.onQuit = { NSApp.terminate(nil) }
         menubar.viewModel.onCopy = { [weak self] id in self?.copyFinalText(of: id) }
@@ -88,11 +90,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.transcriptionLane = lane
 
         let coordinator = RecordingCoordinator(
-            store: store, recorder: AudioRecorder(), encoder: AudioEncoder())
+            store: store, recorder: AudioRecorder(), encoder: AudioEncoder(),
+            microphone: { Microphone.state })
         coordinator.onStateChange = { [weak self] in self?.refresh() }
         coordinator.onQueued = { [weak lane] id in Task { await lane?.enqueue(id) } }
         coordinator.onRecorderStartFailed = { [weak self] error in
             self?.log.error("recording could not start: \(String(describing: error))")
+        }
+        // An unusable microphone refused the recording (#45). Re-read preflight rather
+        // than invent a surface for it: the same device query drives the same degraded
+        // banner, so the glyph turns and the panel names the device problem — the way
+        // every other prerequisite failure is told. No modal, and the hotkey still works.
+        coordinator.onRecordingRefused = { [weak self] state in
+            self?.log.error("recording refused; microphone is \(String(describing: state))")
+            self?.refreshPreflight()
         }
         self.coordinator = coordinator
 
@@ -156,14 +167,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Re-read the prerequisites and push the result to the menubar. Cheap (five
-    /// `stat`s and a `CGPreflightListenEventAccess()`), so it can ride the launch,
-    /// focus and panel-open moments alike.
+    /// `stat`s, a `CGPreflightListenEventAccess()` and a device query), so it can ride
+    /// the launch, focus and panel-open moments alike — and a refused recording.
     ///
     /// Nothing here gates recording: a prerequisite missing at capture time still
     /// records, and the item lands as a retryable `failed`/`missing_binary` from the
-    /// lane that hits it.
+    /// lane that hits it. The microphone is the exception, and it does not gate from
+    /// *here*: the coordinator runs its own query at the instant the key is pressed,
+    /// because this report can be minutes stale by then.
     private func refreshPreflight() {
-        preflight = Preflight.run(inputMonitoringGranted: InputMonitoring.isGranted)
+        preflight = Preflight.run(
+            inputMonitoringGranted: InputMonitoring.isGranted,
+            microphone: Microphone.state)
         refresh()
     }
 

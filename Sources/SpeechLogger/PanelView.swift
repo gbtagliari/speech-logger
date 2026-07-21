@@ -115,6 +115,8 @@ struct PanelView: View {
     private func fix(_ check: PreflightCheck) {
         switch check.fix {
         case .openInputMonitoringSettings: viewModel.onOpenSettings()
+        case .openMicrophoneSettings: viewModel.onOpenMicrophoneSettings()
+        case .openSoundSettings: viewModel.onOpenSoundSettings()
         case .downloadWhisperModel: viewModel.onDownloadModel()
         case nil: break
         }
@@ -160,8 +162,8 @@ struct PanelView: View {
 // MARK: - Preflight failure
 
 /// One failing prerequisite: what is missing, why it matters, and the fix when there
-/// is one to offer. Two of the six checks are fixable from here (the model download
-/// and the Settings pane); the rest are check-and-report, so they carry text only.
+/// is one to offer. The fixable ones are the model download and the three Settings
+/// panes; the rest are check-and-report, so they carry text only.
 private struct PreflightFailureView: View {
     let check: PreflightCheck
     let isDownloadingModel: Bool
@@ -202,8 +204,16 @@ private struct PreflightFailureView: View {
         }
     }
 
+    /// A withheld permission gets the lock; everything else gets the triangle. The
+    /// distinction is what the user has to do, not how bad it is.
     private var glyphName: String {
-        check == .inputMonitoring ? "exclamationmark.lock" : "exclamationmark.triangle"
+        switch check {
+        case .inputMonitoring, .microphonePermission:
+            return "exclamationmark.lock"
+        case .mlxWhisper, .ffmpeg, .claude, .claudeLogin, .whisperModel,
+            .microphoneDevice, .microphoneLevel:
+            return "exclamationmark.triangle"
+        }
     }
 }
 

@@ -47,8 +47,15 @@ struct PreflightTests {
         }
     }
 
-    private func report(_ world: World, inputMonitoringGranted: Bool = true) -> PreflightReport {
-        Preflight.run(configuration: world.configuration, inputMonitoringGranted: inputMonitoringGranted)
+    private func report(
+        _ world: World,
+        inputMonitoringGranted: Bool = true,
+        microphone: MicrophoneState = .usable
+    ) -> PreflightReport {
+        Preflight.run(
+            configuration: world.configuration,
+            inputMonitoringGranted: inputMonitoringGranted,
+            microphone: microphone)
     }
 
     // MARK: - The happy path
@@ -104,6 +111,42 @@ struct PreflightTests {
         #expect(report(world, inputMonitoringGranted: false).failures.map(\.check) == [.inputMonitoring])
     }
 
+    /// The device query is injected as a value, the way the Input Monitoring grant is,
+    /// so an unusable microphone is testable with no real microphone involved.
+    @Test(
+        "an unusable microphone fails its own check and nothing else",
+        arguments: [
+            (MicrophoneState.permissionDenied, PreflightCheck.microphonePermission),
+            (.noDevice, .microphoneDevice),
+            (.silenced, .microphoneLevel),
+        ])
+    func unusableMicrophoneFailsItsCheck(state: MicrophoneState, check: PreflightCheck) throws {
+        let world = try World()
+        defer { world.tearDown() }
+        #expect(report(world, microphone: state).failures.map(\.check) == [check])
+    }
+
+    @Test("a usable microphone fails none of the three device checks")
+    func usableMicrophoneFailsNothing() throws {
+        let world = try World()
+        defer { world.tearDown() }
+        #expect(report(world, microphone: .usable).isSatisfied)
+    }
+
+    /// The three microphone rows read one query, so they can never contradict each
+    /// other: the user is told *which* device problem they have, never several at once.
+    @Test("at most one microphone check fails, whatever the device state",
+          arguments: MicrophoneState.allCases)
+    func microphoneChecksNeverCollide(state: MicrophoneState) throws {
+        let world = try World()
+        defer { world.tearDown() }
+        let microphoneFailures = report(world, microphone: state).failures
+            .filter { PreflightCheck.microphoneChecks.contains($0.check) }
+        #expect(microphoneFailures.count == (state.isUsable ? 0 : 1))
+    }
+
+    /// Every check that *can* fail at once does. The three microphone rows are one
+    /// query, so only the one matching the device state is among them.
     @Test("every check fails at once on a bare machine")
     func nothingInstalled() {
         let missing = URL(fileURLWithPath: "/nonexistent-\(UUID().uuidString)")
@@ -114,8 +157,11 @@ struct PreflightTests {
                 claude: missing.appendingPathComponent("claude").path),
             credentials: missing.appendingPathComponent(".credentials.json"),
             cache: WhisperModelCache(hub: missing))
-        let report = Preflight.run(configuration: configuration, inputMonitoringGranted: false)
-        #expect(report.failures.count == PreflightCheck.allCases.count)
+        let report = Preflight.run(
+            configuration: configuration, inputMonitoringGranted: false, microphone: .noDevice)
+        let expected = PreflightCheck.allCases.count - PreflightCheck.microphoneChecks.count + 1
+        #expect(report.failures.count == expected)
+        #expect(report.failures.map(\.check).contains(.microphoneDevice))
         #expect(!report.isSatisfied)
     }
 
@@ -130,6 +176,19 @@ struct PreflightTests {
         let report = report(world, inputMonitoringGranted: false)
         #expect(report.needsPermission)
         #expect(!report.hasFailedPrerequisite)
+    }
+
+    /// A microphone problem is not the hotkey being deaf, so it does not take the lock
+    /// tier: it aggregates into `failed` with every other missing prerequisite, and the
+    /// banner is where it says which one.
+    @Test("a microphone problem raises the aggregate failed tier, not the lock",
+          arguments: [MicrophoneState.permissionDenied, .noDevice, .silenced])
+    func microphoneSurfacesOnFailedTier(state: MicrophoneState) throws {
+        let world = try World()
+        defer { world.tearDown() }
+        let report = report(world, microphone: state)
+        #expect(report.hasFailedPrerequisite)
+        #expect(!report.needsPermission)
     }
 
     @Test("a missing prerequisite raises the aggregate failed tier, not the lock")
@@ -153,15 +212,32 @@ struct PreflightTests {
 
     // MARK: - The fixes
 
-    /// "The Whisper model download is the one thing preflight fixes"; everything else
-    /// is check-and-report (a binary or a `claude login` is the user's terminal, not
-    /// ours to run).
-    @Test("only the model download and the permission pane carry a fix")
-    func onlyTwoChecksAreFixable() {
+    /// "The Whisper model download is the one thing preflight fixes"; the rest of the
+    /// fixes open the Settings pane that owns the problem. Everything else is
+    /// check-and-report (a binary or a `claude login` is the user's terminal, not ours
+    /// to run, and plugging in a microphone is not something a pane does either).
+    @Test("only the model download and the Settings panes carry a fix")
+    func onlyTheOwnedProblemsAreFixable() {
         #expect(PreflightCheck.whisperModel.fix == .downloadWhisperModel)
         #expect(PreflightCheck.inputMonitoring.fix == .openInputMonitoringSettings)
-        for check in [PreflightCheck.mlxWhisper, .ffmpeg, .claude, .claudeLogin] {
+        #expect(PreflightCheck.microphonePermission.fix == .openMicrophoneSettings)
+        #expect(PreflightCheck.microphoneLevel.fix == .openSoundSettings)
+        for check in [PreflightCheck.mlxWhisper, .ffmpeg, .claude, .claudeLogin, .microphoneDevice] {
             #expect(check.fix == nil)
+        }
+    }
+
+    /// The marriage between the device states and the panel's rows. Every unusable
+    /// state must name a row, or a recording would be refused with nothing on screen
+    /// to say why.
+    @Test("every unusable device state names the row that reports it",
+          arguments: MicrophoneState.allCases)
+    func everyUnusableStateNamesARow(state: MicrophoneState) {
+        if state.isUsable {
+            #expect(state.failingCheck == nil)
+        } else {
+            #expect(state.failingCheck != nil)
+            #expect(PreflightCheck.microphoneChecks.contains(state.failingCheck!))
         }
     }
 

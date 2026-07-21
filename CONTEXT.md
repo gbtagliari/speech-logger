@@ -93,10 +93,20 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   - `claude` — the Claude Code CLI, run once per pass. Gated on `is_error`, not exit code alone.
 
 - **Preflight** — the launch-time gate that checks the three binaries are present, `claude` is
-  logged in, the Whisper model is downloaded, the Input Monitoring grant is live, and — for
-  dictation only — that Accessibility is granted. It never
+  logged in, the Whisper model is downloaded, the Input Monitoring grant is live, the
+  **microphone is usable**, and — for dictation only — that Accessibility is granted. It never
   blocks the hotkey; a missing prerequisite surfaces as a degraded state, not a modal (ADR-0004,
   and the first-run decisions in the map).
+
+- **Microphone state** — the device as it reports itself: `usable`, `permissionDenied`, `noDevice`
+  or `silenced` (muted or at zero gain). A **device fact, not an acoustic one** — queried from
+  AVFoundation and CoreAudio, never inferred from a recording that came back silent (#45). Read in
+  preflight *and* again at the start of every recording, since mute state changes in between. An
+  unusable device **refuses the recording**: it is the one thing that turns the hotkey down, on the
+  grounds that capturing while knowing nothing will arrive is manufacturing the loss on purpose.
+  Every unknown (a device with no mute or volume property) reads as `usable` — a false "unusable"
+  costs a thought, a false "usable" costs a recording. **Accepted residual:** a device that is
+  present, unmuted and gained but receiving nothing is undetectable this way.
 
 - **Item directory** — storage is plain files, one directory per item (ADR-0003), no database.
   Holds `audio.mp3`, the three text stages, `pass1.txt` (the annotated pivot), and `meta.json`

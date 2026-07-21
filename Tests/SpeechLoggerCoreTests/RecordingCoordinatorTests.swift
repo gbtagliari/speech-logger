@@ -43,6 +43,18 @@ private struct StubEncoder: AudioEncoding {
     }
 }
 
+/// A fake device query: the state is set by the test, and every read is counted so
+/// "re-checked at the start of every recording" is observable rather than assumed.
+@MainActor private final class StubMicrophone {
+    var state: MicrophoneState = .usable
+    private(set) var queryCount = 0
+
+    func query() -> MicrophoneState {
+        queryCount += 1
+        return state
+    }
+}
+
 /// A monotonic, thread-safe injectable clock: each `now()` is 1 ms after the last,
 /// so every created item gets a unique, time-ordered id.
 private final class Clock: @unchecked Sendable {
@@ -63,6 +75,7 @@ private final class Clock: @unchecked Sendable {
     private let root: URL
     private let store: ItemStore
     private let recorder = StubRecorder()
+    private let microphone = StubMicrophone()
 
     init() {
         root = FileManager.default.temporaryDirectory
@@ -76,7 +89,10 @@ private final class Clock: @unchecked Sendable {
     }
 
     private func makeCoordinator(encoder: StubEncoder = StubEncoder()) -> RecordingCoordinator {
-        RecordingCoordinator(store: store, recorder: recorder, encoder: encoder)
+        let microphone = self.microphone
+        return RecordingCoordinator(
+            store: store, recorder: recorder, encoder: encoder,
+            microphone: { microphone.query() })
     }
 
     private func cleanup() { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
@@ -245,6 +261,66 @@ private final class Clock: @unchecked Sendable {
         #expect(!coordinator.isRecording)
         #expect(try store.list().isEmpty)
         #expect(reported != nil)
+    }
+
+    // MARK: - The microphone check
+
+    /// Capturing while knowing nothing will arrive is manufacturing the loss on
+    /// purpose: better to cost a moment now than a whole braindump later. Nothing is
+    /// written, so there is no empty item to clean up afterwards either.
+    @Test(
+        "an unusable microphone refuses the recording rather than capturing silence",
+        arguments: [MicrophoneState.permissionDenied, .noDevice, .silenced])
+    func unusableMicrophoneRefuses(state: MicrophoneState) throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        microphone.state = state
+        var refused: MicrophoneState?
+        coordinator.onRecordingRefused = { refused = $0 }
+
+        coordinator.start()
+
+        #expect(!coordinator.isRecording)
+        #expect(recorder.startCount == 0)  // the mic is never opened
+        #expect(try store.list().isEmpty)
+        #expect(refused == state)
+    }
+
+    /// The panel-open check is not enough: mute state changes between opening the panel
+    /// and pressing the key, and the start of a recording is the only instant that
+    /// actually matters.
+    @Test("the device is re-checked at the start of every recording, not once")
+    func deviceIsRecheckedOnEveryStart() async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        coordinator.start()
+        await coordinator.stop()
+        #expect(microphone.queryCount == 1)
+
+        // Muted between the two gestures: the second recording must catch it.
+        microphone.state = .silenced
+        coordinator.start()
+
+        #expect(microphone.queryCount == 2)
+        #expect(!coordinator.isRecording)
+    }
+
+    /// The refusal is reported and nothing else: no modal, no state change to recover
+    /// from, and the next press of the hotkey is accepted exactly as before.
+    @Test("a refusal leaves the hotkey working: the next start records once the mic is back")
+    func refusalDoesNotBlockTheHotkey() throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        microphone.state = .silenced
+        coordinator.start()
+        #expect(!coordinator.isRecording)
+
+        microphone.state = .usable
+        coordinator.start()
+
+        #expect(coordinator.isRecording)
+        #expect(recorder.startCount == 1)
+        #expect(try store.list().count == 1)
     }
 
     @Test("stopping when not recording is a no-op")
