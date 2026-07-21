@@ -70,5 +70,13 @@ transformed, never obeyed. Delimiting the span is the standard mitigation.
 - ADR-0001 calls prompt calibration "implementation tuning, not an architectural decision". Input
   framing is the exception: it decides whether the model performs the task at all, independently
   of how the task is worded.
-- Effort level was not tested as a factor. Everything here was measured at the pinned
-  `--effort low` (ADR-0002); raising it could change this behaviour without warning.
+- **`--effort low` was a necessary condition for the bug.** On the pre-fix prompts the same input
+  collapsed 10/15 at `low` and **0/15** at `high`: given enough budget the model notices the role
+  conflict unaided. Raising effort is not an available fix — the contract pins `low` for cost and
+  latency (ADR-0002) — but it has two consequences that are:
+  - The fix holds at higher effort too (0/15 on the shipped prompts at `high`), so changing effort
+    does not reintroduce this.
+  - Every drift number here is **only meaningful at `--effort low`**. A measurement taken at higher
+    effort reports clean whether or not the prompts are still sound. `DriftCheck` goes through
+    `ClaudeOrganizer`, which pins it, so this holds as long as the pin does — `OrganizerTests`
+    covers that.

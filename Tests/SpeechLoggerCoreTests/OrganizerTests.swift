@@ -31,6 +31,20 @@ struct OrganizerTests {
         #expect(argv.contains("--print"))
     }
 
+    /// `--effort low` is pinned for cost and latency (ADR-0002), but it is also the
+    /// condition under which the role-collapse measurement in ADR-0008 was taken, and
+    /// under which it is the *only* thing holding the delimiter's value up.
+    ///
+    /// Measured on the pre-fix prompts against the typed acceptance case: 10/15 runs
+    /// collapsed at `low`, 0/15 at `high`. Raising effort lets the model notice the
+    /// role conflict on its own, which means a change here silently invalidates every
+    /// drift number in ADR-0008 — a run at higher effort reports clean whether or not
+    /// the prompts are still sound.
+    @Test("the pinned effort is load-bearing for role integrity, not only for cost")
+    func argvPinsEffortLowForRoleIntegrity() {
+        #expect(adjacent(ClaudeOrganizer.arguments(systemPrompt: "SYS"), "--effort", "low"))
+    }
+
     @Test("the transcript is never in the argv — it goes on stdin, out of `ps` and into the cache")
     func argvHasNoTranscript() {
         let argv = ClaudeOrganizer.arguments(systemPrompt: "SYS")
