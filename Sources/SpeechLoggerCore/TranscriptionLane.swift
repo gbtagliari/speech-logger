@@ -25,6 +25,12 @@ public actor TranscriptionLane {
     /// **Braindumps only** (#41). A dictation has no organization stage, so the lane
     /// advances it to `transcribed` itself and never fires this.
     private let onTranscribed: (@Sendable (String) -> Void)?
+    /// Dictation's delivery seam (#42): fired with the finished **transcript text**
+    /// once the item rests at `transcribed`. The lane owns *when* a dictation is
+    /// deliverable; the app target owns *how* (the clipboard write is AppKit, and this
+    /// module is Foundation-only). Dictations only — a braindump is collected from the
+    /// panel, never pushed.
+    private let onDictationReady: (@Sendable (_ transcript: String) -> Void)?
 
     /// The FIFO backlog. Only touched on the actor, so no lock is needed.
     private var queue: [String] = []
@@ -42,12 +48,14 @@ public actor TranscriptionLane {
         store: ItemStore,
         transcriber: any Transcribing,
         onStateChange: (@Sendable () -> Void)? = nil,
-        onTranscribed: (@Sendable (String) -> Void)? = nil
+        onTranscribed: (@Sendable (String) -> Void)? = nil,
+        onDictationReady: (@Sendable (_ transcript: String) -> Void)? = nil
     ) {
         self.store = store
         self.transcriber = transcriber
         self.onStateChange = onStateChange
         self.onTranscribed = onTranscribed
+        self.onDictationReady = onDictationReady
     }
 
     /// Add an item to the back of the lane. Returns immediately; the transcription
@@ -137,6 +145,7 @@ public actor TranscriptionLane {
             case .dictation:
                 _ = try store.markTranscribed(id)
                 onStateChange?()
+                deliver(id)
             case .braindump:
                 onTranscribed?(id)
             }
@@ -157,6 +166,20 @@ public actor TranscriptionLane {
             }
             onStateChange?()
         }
+    }
+
+    /// Hand a finished dictation's transcript to its delivery (#42) — today the
+    /// clipboard, every time and never restored, which is the whole of the mode's
+    /// output until the paste lands on top of it.
+    ///
+    /// Read *after* the state flip and tolerant of failure: the item is `transcribed`
+    /// either way, so an unreadable transcript costs the clipboard write, not the
+    /// item. There is nothing to fail it with — the transcript is on disk, which is
+    /// what `transcribed` claims.
+    private func deliver(_ id: String) {
+        guard let onDictationReady else { return }
+        guard let data = try? store.read(file: ItemFile.transcript, for: id) else { return }
+        onDictationReady(String(decoding: data, as: UTF8.self))
     }
 
     /// Record a transcription failure with the reason its `TranscriptionError` maps to

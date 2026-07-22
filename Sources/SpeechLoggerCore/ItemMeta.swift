@@ -143,6 +143,22 @@ public struct ItemMeta: Codable, Equatable, Sendable {
         )
     }
 
+    /// A new meta under a different mode, for the one moment a mode changes: the end
+    /// of a recording, where the gesture finally says which speech act it was (#42).
+    /// Everything else about the item is untouched — it is a label, not a transition.
+    public func labeled(as mode: ItemMode) -> ItemMeta {
+        ItemMeta(
+            schemaVersion: Self.currentSchemaVersion,
+            state: state,
+            mode: mode,
+            created: created,
+            transitions: transitions,
+            duration: duration,
+            error: error,
+            stoppedAt: stoppedAt
+        )
+    }
+
     /// A new meta at `failed`, carrying the error and stamping the `failed` entry time.
     public func failing(stage: Stage, reason: FailureReason, detail: String?, at: Date) -> ItemMeta {
         ItemMeta(
