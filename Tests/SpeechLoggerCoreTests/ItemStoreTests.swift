@@ -198,6 +198,94 @@ final class ItemStoreTests {
         }
     }
 
+    // MARK: - Retention sweep (dictations expire at seven days)
+
+    /// A settled dictation: recording -> queued -> transcribing -> transcribed, with
+    /// its transcript on disk.
+    private func makeDictation(transcript: String = "manda o print") throws -> Item {
+        let item = try store.create(mode: .dictation)
+        _ = try store.markQueued(item.id, duration: 0.6, mode: .dictation)
+        _ = try store.markTranscribing(item.id)
+        try store.write(Data(transcript.utf8), to: ItemFile.transcript, for: item.id)
+        let meta = try store.markTranscribed(item.id)
+        return Item(id: item.id, meta: meta)
+    }
+
+    /// A settled braindump, organized with its final text.
+    private func makeBraindump(finalText: String = "o texto final") throws -> Item {
+        let item = try store.create()
+        _ = try store.markQueued(item.id, duration: 8)
+        _ = try store.markTranscribing(item.id)
+        _ = try store.markOrganizing(item.id)
+        let meta = try store.markOrganized(item.id, finalText: finalText)
+        return Item(id: item.id, meta: meta)
+    }
+
+    @Test("the sweep trashes a dictation past the window and leaves everything else")
+    func sweepTrashesExpiredDictations() throws {
+        let old = try makeDictation()
+        let braindump = try makeBraindump()
+        let live = try store.create(mode: .dictation)  // in flight: never swept
+
+        let instant = old.meta.created.addingTimeInterval(Retention.dictationWindow + 1)
+        let swept = try store.sweepExpiredDictations(at: instant)
+
+        #expect(swept == [old.id])
+        #expect(Set(try store.list().map(\.id)) == [braindump.id, live.id])
+    }
+
+    @Test("a dictation inside the window survives the sweep")
+    func sweepKeepsFreshDictations() throws {
+        let fresh = try makeDictation()
+        let instant = fresh.meta.created.addingTimeInterval(Retention.dictationWindow - 1)
+        #expect(try store.sweepExpiredDictations(at: instant).isEmpty)
+        #expect(try store.list().map(\.id) == [fresh.id])
+    }
+
+    @Test("the sweep goes to the Trash, on the manual-delete path")
+    func sweepGoesToTrash() throws {
+        // Recoverable, because it is a deletion the user did not ask for: the same
+        // `delete` a click uses, not the hard-remove `discard`.
+        let old = try makeDictation()
+        let dir = root.appendingPathComponent(old.id)
+        _ = try store.sweepExpiredDictations(
+            at: old.meta.created.addingTimeInterval(Retention.dictationWindow + 1))
+        #expect(!FileManager.default.fileExists(atPath: dir.path))
+        // The one assertion that has to leave the temp root: "went to the Trash" is only
+        // observable in the real Trash, and it is the acceptance criterion. Safe to look
+        // there because the directory name is a ULID — it cannot collide with anything —
+        // and the test takes its own litter back out.
+        let trashed = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".Trash", isDirectory: true)
+            .appendingPathComponent(old.id, isDirectory: true)
+        #expect(FileManager.default.fileExists(atPath: trashed.path))
+        try? FileManager.default.removeItem(at: trashed)
+    }
+
+    // MARK: - Copyable output text
+
+    @Test("outputText is the final pass-2 text for a braindump")
+    func outputTextOfBraindump() throws {
+        let item = try makeBraindump(finalText: "o texto organizado")
+        #expect(try store.outputText(for: item.id) == "o texto organizado")
+    }
+
+    @Test("outputText is the raw transcript for a dictation")
+    func outputTextOfDictation() throws {
+        let item = try makeDictation(transcript: "commita isso")
+        #expect(try store.outputText(for: item.id) == "commita isso")
+    }
+
+    @Test("an unsettled item has no copyable output, whatever is on disk")
+    func outputTextOnlyWhenSettled() throws {
+        let item = try store.create(mode: .dictation)
+        try store.write(Data("half".utf8), to: ItemFile.transcript, for: item.id)
+        #expect(try store.outputText(for: item.id) == nil)
+        _ = try store.markQueued(item.id, duration: 0.6, mode: .dictation)
+        _ = try store.markTranscribing(item.id)
+        #expect(try store.outputText(for: item.id) == nil)
+    }
+
     // MARK: - Discard (silent hard-remove, not Trash)
 
     @Test("discard hard-removes a recording-stage item without going to Trash")

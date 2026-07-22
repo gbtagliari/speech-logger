@@ -23,8 +23,8 @@ is the whole reason there is a second mode:
   reply). You read the result in two seconds and fix it yourself, so the contract is over-engineering
   and the clipboard round trip is the entire friction. Push-to-talk, raw STT, pasted at the cursor.
   Specified in ADR-0007 and issue #40. The gesture, the raw transcript and the clipboard write
-  are built (#42), and so are the paste at the cursor, its guard and the sound (#43);
-  **the panel's dictation list is not** (#44).
+  are built (#42), the paste at the cursor, its guard and the sound (#43), and the panel's
+  dictation list with its seven-day expiry (#44). The mode is complete.
 
 `dictation` deliberately collides with Apple's Dictation: the app is taking that job, and the
 "typing at the cursor" non-goal was revoked to do it (ADR-0007). In prose, qualify — "macOS

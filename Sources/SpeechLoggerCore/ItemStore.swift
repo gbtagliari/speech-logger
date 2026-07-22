@@ -238,12 +238,52 @@ public struct ItemStore: Sendable {
         return String(decoding: data, as: UTF8.self)
     }
 
+    /// The item's copyable output, whichever file that is for its mode: the pass-2
+    /// `final.txt` for a braindump, the raw `transcript.txt` for a dictation (#44).
+    ///
+    /// Read off the **state**, not the mode, which is what keeps the "nothing partial"
+    /// invariant one rule rather than two: only the two happy-path terminals expose
+    /// text, and each mode has exactly one. An item that is still working, or that
+    /// died, has no output — the transcript of a half-run braindump is not its answer.
+    public func outputText(for id: String) throws(StoreError) -> String? {
+        let file: String
+        switch try meta(for: id).state {
+        case .organized: file = ItemFile.final
+        case .transcribed: file = ItemFile.transcript
+        case .recording, .queued, .transcribing, .organizing, .failed, .cancelled:
+            return nil
+        }
+        guard let data = try read(file: file, for: id) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     // MARK: - Delete
 
     /// Delete an item by moving its directory to the macOS Trash (recoverable).
     public func delete(_ id: String) throws(StoreError) {
         guard directoryExists(id) else { throw StoreError.itemNotFound(id) }
         try wrap { try FileManager.default.trashItem(at: directory(for: id), resultingItemURL: nil) }
+    }
+
+    /// Sweep the dictations that have outlived their seven-day window as of `instant`,
+    /// and return the ids that went (#44).
+    ///
+    /// The instant is supplied, never read here, so the sweep is judged by the same
+    /// fixture clock its predicate is. It goes through `delete` — the macOS Trash, the
+    /// path a manual delete takes — precisely because this deletion is one the user did
+    /// not ask for, so it stays recoverable.
+    ///
+    /// A directory that will not move throws, abandoning the rest of the run rather
+    /// than being swallowed. Nothing is lost by stopping: whatever did not go is still
+    /// expired, so the next sweep picks it up again.
+    @discardableResult
+    public func sweepExpiredDictations(at instant: Date) throws(StoreError) -> [String] {
+        var swept: [String] = []
+        for item in Retention.expired(among: try list(), at: instant) {
+            try delete(item.id)
+            swept.append(item.id)
+        }
+        return swept
     }
 
     /// Silently hard-remove an item's directory (not to Trash). For a too-short

@@ -1,7 +1,7 @@
 import SpeechLoggerCore
 import SwiftUI
 
-/// The menubar dropdown panel: three sections built from `PanelModel`, plus the
+/// The menubar dropdown panel: four sections built from `PanelModel`, plus the
 /// degraded Input-Monitoring banner and a footer. A thin render of `PanelViewModel`
 /// — no pipeline logic lives here.
 struct PanelView: View {
@@ -45,6 +45,7 @@ struct PanelView: View {
                     liveSection
                     readySection
                     needsYouSection
+                    dictationSection
                 }
             }
         }
@@ -88,6 +89,24 @@ struct PanelView: View {
                     onDelete: { viewModel.onDelete(row.id) },
                     onOpenFolder: { viewModel.onOpenFolder(row.id) },
                     onReprocess: { viewModel.onReprocess(row.id) })
+            }
+        }
+    }
+
+    /// The dictation list (#44): kept below the braindump log and out of it, so the log
+    /// stays the record of formed thought. Last on purpose — a dictation was already
+    /// delivered at the cursor, so this section is a recovery net, not a destination.
+    @ViewBuilder private var dictationSection: some View {
+        if !viewModel.model.dictations.isEmpty {
+            SectionLabel(title: "Ditados", count: viewModel.model.dictations.count)
+            ForEach(viewModel.model.dictations) { row in
+                DictationRowView(
+                    row: row,
+                    justCopied: copiedID == row.id,
+                    onCopy: { copy(row.id) },
+                    onRetry: { viewModel.onRetry(row.id) },
+                    onDelete: { viewModel.onDelete(row.id) },
+                    onOpenFolder: { viewModel.onOpenFolder(row.id) })
             }
         }
     }
@@ -405,6 +424,73 @@ private struct NeedsRowView: View {
     private var tint: Color { row.kind == .failed ? .orange : .secondary }
 
     private var retryHelp: String { row.kind == .failed ? "tentar de novo" : "retomar" }
+}
+
+// MARK: - Dictation row
+
+/// A terminal dictation (#44): the transcript when it finished, the death line when it
+/// did not. Click-to-copy on the finished ones, retry on the dead ones, and never
+/// reprocess — the mode has no LLM run to start over, so the entry is not in the menu.
+private struct DictationRowView: View {
+    let row: PanelModel.DictationRow
+    let justCopied: Bool
+    let onCopy: () -> Void
+    let onRetry: () -> Void
+    let onDelete: () -> Void
+    let onOpenFolder: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: { if row.isCopyable { onCopy() } }) {
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: glyphName).font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(tint).frame(width: 16).padding(.top, 1)
+                Text(row.label)
+                    .font(.system(size: 12.5)).lineLimit(2).foregroundStyle(textTint)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                trailing
+            }
+            .padding(.horizontal, 13).padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(hovering ? Color.primary.opacity(0.05) : .clear)
+        .onHover { hovering = $0 }
+    }
+
+    @ViewBuilder private var trailing: some View {
+        if justCopied {
+            Text("copiado").font(.system(size: 11, weight: .semibold)).foregroundStyle(.green)
+        } else if hovering {
+            HStack(spacing: 4) {
+                if row.isRetryable {
+                    IconButton(systemName: "arrow.clockwise", help: "transcrever de novo", action: onRetry)
+                }
+                // No reprocess: there is nothing to run again but the transcription,
+                // which is what retry already is.
+                RowMenu(onOpenFolder: onOpenFolder, onReprocess: nil)
+                IconButton(systemName: "xmark", help: "apagar", action: onDelete)
+            }
+        } else {
+            Text(row.timeText).font(.system(size: 11).monospacedDigit()).foregroundStyle(.tertiary)
+        }
+    }
+
+    /// The quote glyph says "this is speech that was delivered"; a death keeps the
+    /// braindump log's own glyphs, so a failure reads the same everywhere.
+    private var glyphName: String {
+        switch row.kind {
+        case .done: return "quote.bubble"
+        case .failed: return "exclamationmark.triangle.fill"
+        case .cancelled: return "slash.circle"
+        }
+    }
+
+    /// Amber for a failure, grey otherwise — the same two-way tint `NeedsRowView` uses,
+    /// so a dead dictation looks like every other dead item.
+    private var tint: Color { row.kind == .failed ? .orange : .secondary }
+
+    private var textTint: Color { row.kind == .failed ? .orange : .primary }
 }
 
 // MARK: - Shared bits

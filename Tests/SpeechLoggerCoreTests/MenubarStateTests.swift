@@ -87,6 +87,26 @@ struct MenubarStateTests {
                 == .failed)
     }
 
+    @Test("a failed dictation climbs the ladder like any other failure")
+    func failedDictationDrivesGlyph() {
+        // The ladder is mode-agnostic with no exception (#44): suppressing a dictation
+        // here would need the mode-aware icon ADR-0007 rejects, and the failure tier is
+        // the mode's only failure signal — it has no other visual surface.
+        let failed = Item(
+            id: "a", meta: ItemMeta(state: .failed, mode: .dictation, created: Date()))
+        #expect(
+            MenubarState.resolve(items: [failed], isRecording: false, preflight: .satisfied)
+                == .failed)
+    }
+
+    @Test("a finished dictation alone leaves the icon idle")
+    func transcribedDictationIsIdle() {
+        let done = Item(
+            id: "a", meta: ItemMeta(state: .transcribed, mode: .dictation, created: Date()))
+        #expect(
+            MenubarState.resolve(items: [done], isRecording: false, preflight: .satisfied) == .idle)
+    }
+
     // MARK: - Preflight tiers
 
     /// Preflight failures surface as the aggregate `failed` icon tier. With no items

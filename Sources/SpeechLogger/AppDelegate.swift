@@ -51,17 +51,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             log.error("boot recovery failed: \(String(describing: error))")
         }
 
+        // After recovery, never before: an item the crash left in flight is stuck, and
+        // sweeping it while it still reads as live would leave it behind forever.
+        sweepExpiredDictations()
+
         let menubar = MenubarController()
         // Panel-open is one of preflight's two re-check moments: the panel is where
-        // the failures are read, so it must not show a stale one.
-        menubar.onPanelWillOpen = { [weak self] in self?.refreshPreflight() }
+        // the failures are read, so it must not show a stale one. It is also when the
+        // dictation list is about to be read, so the sweep rides the same moment.
+        menubar.onPanelWillOpen = { [weak self] in
+            self?.sweepExpiredDictations()
+            self?.refreshPreflight()
+        }
         menubar.viewModel.onOpenSettings = { InputMonitoring.openSettings() }
         menubar.viewModel.onOpenAccessibilitySettings = { Accessibility.requestGrant() }
         menubar.viewModel.onOpenMicrophoneSettings = { Microphone.openPrivacySettings() }
         menubar.viewModel.onOpenSoundSettings = { Microphone.openSoundSettings() }
         menubar.viewModel.onDownloadModel = { [weak self] in self?.downloadWhisperModel() }
         menubar.viewModel.onQuit = { NSApp.terminate(nil) }
-        menubar.viewModel.onCopy = { [weak self] id in self?.copyFinalText(of: id) }
+        menubar.viewModel.onCopy = { [weak self] id in self?.copyOutputText(of: id) }
         menubar.viewModel.onDelete = { [weak self] id in self?.deleteItem(id) }
         menubar.viewModel.onRetry = { [weak self] id in self?.pipelineController?.retry(id) }
         menubar.viewModel.onReprocess = { [weak self] id in self?.confirmReprocess(id) }
@@ -74,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // first ready item is not lost to a pending prompt; a denial degrades to the
         // panel and never blocks the pipeline.
         let readyNotifier = ReadyNotifier()
-        readyNotifier.onCopy = { [weak self] id in self?.copyFinalText(of: id) }
+        readyNotifier.onCopy = { [weak self] id in self?.copyOutputText(of: id) }
         readyNotifier.requestAuthorization()
         self.readyNotifier = readyNotifier
 
@@ -258,10 +266,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let model = PanelModel.build(
             items: items,
             now: Date(),
-            finalText: { [weak self] id in
+            outputText: { [weak self] id in
                 guard let self, let store = self.store else { return nil }
                 do {
-                    return try store.finalText(for: id)
+                    return try store.outputText(for: id)
                 } catch {
                     self.log.error(
                         "preview text unavailable for \(id, privacy: .public): \(String(describing: error))")
@@ -293,14 +301,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         readyNotifier.notifyReady(id: id, finalText: preview)
     }
 
-    /// Copy an organized item's final pass-2 text to the clipboard. Only `organized`
-    /// items return text, so nothing partial is ever copyable as final.
-    private func copyFinalText(of id: String) {
-        guard let text = try? store?.finalText(for: id) else {
-            log.error("copy requested for \(id, privacy: .public) with no final text")
+    /// Copy a settled item's output to the clipboard: the final pass-2 text of an
+    /// organized braindump, or the raw transcript of a finished dictation (#44). Only
+    /// the two happy-path terminals return text, so nothing partial is ever copyable.
+    private func copyOutputText(of id: String) {
+        guard let text = try? store?.outputText(for: id) else {
+            log.error("copy requested for \(id, privacy: .public) with no output text")
             return
         }
         copyToClipboard(text)
+    }
+
+    /// Sweep the dictations past their seven-day window to the Trash (#44). Run at
+    /// launch and on panel-open — the two moments the list is about to be read — rather
+    /// than on a timer: the window is a week, so nothing turns on sweeping to the
+    /// minute, and a timer would delete rows out from under an open panel.
+    ///
+    /// The wall clock is read here and nowhere below: `Retention` and the store's sweep
+    /// both take the instant, which is what keeps the rule testable against a fixture.
+    private func sweepExpiredDictations() {
+        do {
+            let swept = try store?.sweepExpiredDictations(at: Date()) ?? []
+            if !swept.isEmpty { log.info("swept \(swept.count) expired dictation(s) to the Trash") }
+        } catch {
+            log.error("dictation sweep failed: \(String(describing: error))")
+        }
     }
 
     /// Deliver a finished dictation: the clipboard first, then the paste at the cursor

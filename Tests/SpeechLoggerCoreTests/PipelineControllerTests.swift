@@ -54,6 +54,22 @@ import Testing
         #expect(try ctx.store.finalText(for: id) != nil)
     }
 
+    @Test("retry of a failed dictation re-transcribes and rests at transcribed (#44)")
+    func retryDictationReTranscribes() async throws {
+        // What the dictation list's retry control actually does: the mode has no
+        // organization stage, so the same transcription-stage resume the braindump uses
+        // lands on the other terminal, with a fresh transcript to copy.
+        let ctx = try Context()
+        let id = try ctx.queuedItem(withAudio: true, mode: .dictation)
+        _ = try ctx.store.markTranscribing(id)
+        _ = try ctx.store.fail(id, stage: .transcription, reason: .cliError, detail: "boom")
+
+        ctx.controller.retry(id)
+        try await waitUntil { (try? ctx.store.meta(for: id))?.state == .transcribed }
+
+        #expect(try ctx.store.outputText(for: id) == "raw transcript")
+    }
+
     @Test("retry from pass2 resumes organization reusing the pivot, never re-annotating")
     func retryPass2ReusesPivot() async throws {
         let ctx = try Context()
@@ -252,12 +268,12 @@ import Testing
         /// `withAudio`, stage a dummy `audio.mp3` so the fake transcriber produces a
         /// transcript and completes; without it, the transcriber blocks until cancelled
         /// (standing in for a long in-flight run a test will stop/quit).
-        func queuedItem(withAudio: Bool = false) throws -> String {
-            let item = try store.create()
+        func queuedItem(withAudio: Bool = false, mode: ItemMode = .braindump) throws -> String {
+            let item = try store.create(mode: mode)
             if withAudio {
                 try store.write(Data("mp3".utf8), to: ItemFile.audio, for: item.id)
             }
-            _ = try store.markQueued(item.id, duration: 1)
+            _ = try store.markQueued(item.id, duration: 1, mode: mode)
             return item.id
         }
 

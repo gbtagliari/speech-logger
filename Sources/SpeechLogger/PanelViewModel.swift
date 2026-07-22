@@ -7,8 +7,8 @@ import SpeechLoggerCore
 /// stays in `SpeechLoggerCore.PanelModel` (tested), not in the view.
 @MainActor
 final class PanelViewModel: ObservableObject {
-    /// The three sections, rebuilt from the item list on each refresh.
-    @Published var model = PanelModel(live: [], ready: [], needsYou: [])
+    /// The four sections, rebuilt from the item list on each refresh.
+    @Published var model = PanelModel(live: [], ready: [], needsYou: [], dictations: [])
     /// The launch-time prerequisite check: its failures are the panel's degraded
     /// banner. Re-read on focus and panel-open, never a modal.
     @Published var preflight = PreflightReport.satisfied
@@ -22,7 +22,8 @@ final class PanelViewModel: ObservableObject {
     /// panel's *Acontecendo agora* clock matches the menubar title exactly.
     @Published var recordingSeconds = 0
 
-    /// Copy an organized item's final pass-2 text to the clipboard.
+    /// Copy a settled item's output to the clipboard: an organized braindump's final
+    /// pass-2 text, or a finished dictation's raw transcript.
     var onCopy: (String) -> Void = { _ in }
     /// Send an item to the macOS Trash.
     var onDelete: (String) -> Void = { _ in }
