@@ -31,6 +31,15 @@ public actor TranscriptionLane {
     /// module is Foundation-only). Dictations only — a braindump is collected from the
     /// panel, never pushed.
     private let onDictationReady: (@Sendable (_ transcript: String) -> Void)?
+    /// Dictation's other exit (#43): fired when a dictation ends with **no text to
+    /// deliver** — it failed, or its transcript could not be read back. The app target
+    /// answers it with the sound, which is the mode's only failure signal: there is no
+    /// notification, and an empty field looks exactly like an app that heard nothing.
+    ///
+    /// Dictations only, and failures only. A cancelled item is silent — you stopped it,
+    /// so a sound would report your own click back to you — and a braindump is silent
+    /// because it is collected from the panel by someone who has walked away.
+    private let onDictationUndelivered: (@Sendable () -> Void)?
 
     /// The FIFO backlog. Only touched on the actor, so no lock is needed.
     private var queue: [String] = []
@@ -49,13 +58,15 @@ public actor TranscriptionLane {
         transcriber: any Transcribing,
         onStateChange: (@Sendable () -> Void)? = nil,
         onTranscribed: (@Sendable (String) -> Void)? = nil,
-        onDictationReady: (@Sendable (_ transcript: String) -> Void)? = nil
+        onDictationReady: (@Sendable (_ transcript: String) -> Void)? = nil,
+        onDictationUndelivered: (@Sendable () -> Void)? = nil
     ) {
         self.store = store
         self.transcriber = transcriber
         self.onStateChange = onStateChange
         self.onTranscribed = onTranscribed
         self.onDictationReady = onDictationReady
+        self.onDictationUndelivered = onDictationUndelivered
     }
 
     /// Add an item to the back of the lane. Returns immediately; the transcription
@@ -158,11 +169,18 @@ public actor TranscriptionLane {
                 if let meta = try? store.meta(for: id), !meta.state.isTerminal {
                     _ = try? store.cancel(id, stage: .transcription)
                 }
-            } else if let error = error as? TranscriptionError {
-                fail(id, error)
             } else {
-                // A store error mid-transition (e.g. the item directory vanished).
-                _ = try? store.fail(id, stage: .transcription, reason: .cliError, detail: "\(error)")
+                if let error = error as? TranscriptionError {
+                    fail(id, error)
+                } else {
+                    // A store error mid-transition (e.g. the item directory vanished).
+                    _ = try? store.fail(id, stage: .transcription, reason: .cliError, detail: "\(error)")
+                }
+                // The mode read at pickup, so this is the item's own label and not a
+                // guess: a dead dictation is the sound's second meaning. Announced from
+                // here rather than from `fail` so the store-error path is covered too —
+                // the user is owed the signal whichever way the item died.
+                if queued.mode == .dictation { onDictationUndelivered?() }
             }
             onStateChange?()
         }
@@ -176,10 +194,16 @@ public actor TranscriptionLane {
     /// either way, so an unreadable transcript costs the clipboard write, not the
     /// item. There is nothing to fail it with — the transcript is on disk, which is
     /// what `transcribed` claims.
+    ///
+    /// Unreadable is still undelivered, so it sounds: from the user's chair a
+    /// transcript that cannot be read back is the same event as one that did not land,
+    /// and silence there would be the mode failing with no signal at all.
     private func deliver(_ id: String) {
-        guard let onDictationReady else { return }
-        guard let data = try? store.read(file: ItemFile.transcript, for: id) else { return }
-        onDictationReady(String(decoding: data, as: UTF8.self))
+        guard let data = try? store.read(file: ItemFile.transcript, for: id) else {
+            onDictationUndelivered?()
+            return
+        }
+        onDictationReady?(String(decoding: data, as: UTF8.self))
     }
 
     /// Record a transcription failure with the reason its `TranscriptionError` maps to

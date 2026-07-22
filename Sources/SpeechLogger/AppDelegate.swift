@@ -19,6 +19,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkeyMonitor: HotkeyMonitor?
     private var menubar: MenubarController?
     private var readyNotifier: ReadyNotifier?
+    /// The auto-paste guard (#43): armed by the key release that ends a dictation,
+    /// disarmed by the first app activation after it. Held here because it is the one
+    /// piece of state shared between the hotkey, the workspace observer and the
+    /// transcription lane's delivery.
+    private var autoPaste = AutoPasteGuard()
+    /// The thin workspace adapter feeding it. Owned for its lifetime: it observes from
+    /// launch, so an activation before the very first dictation is seen and ignored.
+    private var activationObserver: AppActivationObserver?
     /// The prerequisite check: read at launch, re-read on focus and panel-open. It
     /// reports; it never gates the hotkey.
     private var preflight = PreflightReport.satisfied
@@ -48,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the failures are read, so it must not show a stale one.
         menubar.onPanelWillOpen = { [weak self] in self?.refreshPreflight() }
         menubar.viewModel.onOpenSettings = { InputMonitoring.openSettings() }
+        menubar.viewModel.onOpenAccessibilitySettings = { Accessibility.requestGrant() }
         menubar.viewModel.onOpenMicrophoneSettings = { Microphone.openPrivacySettings() }
         menubar.viewModel.onOpenSoundSettings = { Microphone.openSoundSettings() }
         menubar.viewModel.onDownloadModel = { [weak self] in self?.downloadWhisperModel() }
@@ -87,11 +96,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onTranscribed: { [weak organizationLane] id in
                 Task { await organizationLane?.organize(id) }
             },
-            // Dictation's delivery, and for now the whole of it: the raw transcript
-            // goes to the clipboard on every dictation, always, and is never restored
-            // (#42). Burning the clipboard is the accepted cost of the mode.
+            // Dictation's delivery: the clipboard, then the paste at the cursor if the
+            // guard is still armed and the grant still stands (#42, #43).
             onDictationReady: { [weak self] transcript in
-                Task { @MainActor in self?.copyToClipboard(transcript) }
+                Task { @MainActor in self?.deliverDictation(transcript) }
+            },
+            // A dictation that produced no text at all. Nothing to paste and nothing on
+            // the clipboard: the sound is the whole signal.
+            onDictationUndelivered: { [weak self] in
+                Task { @MainActor in self?.announceUndeliveredDictation() }
             })
         self.transcriptionLane = lane
 
@@ -125,8 +138,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let hotkeyMonitor = HotkeyMonitor(
             isRecording: { [weak coordinator] in coordinator?.isRecording ?? false },
-            onGesture: { [weak coordinator] gesture in coordinator?.handle(gesture) })
+            onGesture: { [weak self] gesture in
+                // Arm before the gesture is carried out: the release *is* the arming
+                // event, and from this instant any app activation means the user is no
+                // longer looking at the field they dictated into. A hold that turns out
+                // too short or silent leaves the guard armed with nothing coming, which
+                // costs nothing — only a transcript ever reads it.
+                if case .stop(.dictation) = gesture { self?.autoPaste.arm() }
+                self?.coordinator?.handle(gesture)
+            })
         self.hotkeyMonitor = hotkeyMonitor
+
+        // Watch app activations from launch, so the guard is fed by a live observer
+        // rather than one installed per dictation and racing the release.
+        let activationObserver = AppActivationObserver()
+        activationObserver.onActivate = { [weak self] in self?.autoPaste.appDidActivate() }
+        activationObserver.start()
+        self.activationObserver = activationObserver
 
         installHotkey()
         // The launch-time read, which also does the first `refresh()`.
@@ -150,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         hotkeyMonitor?.stop()
+        activationObserver?.stop()
     }
 
     /// Focus is preflight's other re-check moment: the user leaves to install a binary
@@ -186,6 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refreshPreflight() {
         preflight = Preflight.run(
             inputMonitoringGranted: InputMonitoring.isGranted,
+            accessibilityGranted: Accessibility.isTrusted,
             microphone: Microphone.state)
         refresh()
     }
@@ -271,6 +301,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         copyToClipboard(text)
+    }
+
+    /// Deliver a finished dictation: the clipboard first, then the paste at the cursor
+    /// if it is still owed one.
+    ///
+    /// The order is load-bearing three times over. The clipboard is written **first**
+    /// because it is both the paste's payload and its recovery net — every failure the
+    /// paste has ends with `Cmd+V` getting the text back, so it must already be there
+    /// even when nothing is posted. The trust query runs **immediately before** posting,
+    /// not at launch, because the grant can be revoked in between. And the sound plays
+    /// **after** the paste decision, never before.
+    ///
+    /// A withheld grant degrades and never kills: the item, the transcript and the
+    /// clipboard all stand, only the auto-paste is lost, and re-reading preflight flips
+    /// the banner that says so.
+    private func deliverDictation(_ transcript: String) {
+        copyToClipboard(transcript)
+        let isTrusted = Accessibility.isTrusted
+        switch autoPaste.transcriptReady(isTrusted: isTrusted) {
+        case .paste: CursorPaste.post()
+        case .sound: DictationSound.play()
+        }
+        // The banner is stale the moment the grant is: refresh only when it is missing,
+        // so the common path stays a pure delivery. A grant restored mid-session is
+        // picked up by the focus re-read, as every other prerequisite is.
+        if !isTrusted { refreshPreflight() }
+    }
+
+    /// A dictation ended with no text to deliver — it failed, or its transcript could
+    /// not be read back. Same sound, its other meaning: there is nothing to paste,
+    /// nothing on the clipboard, and an empty field would otherwise be indistinguishable
+    /// from the app having heard nothing at all.
+    private func announceUndeliveredDictation() {
+        DictationSound.play()
     }
 
     /// Put text on the general pasteboard, replacing whatever was there. The single

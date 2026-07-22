@@ -50,11 +50,13 @@ struct PreflightTests {
     private func report(
         _ world: World,
         inputMonitoringGranted: Bool = true,
+        accessibilityGranted: Bool = true,
         microphone: MicrophoneState = .usable
     ) -> PreflightReport {
         Preflight.run(
             configuration: world.configuration,
             inputMonitoringGranted: inputMonitoringGranted,
+            accessibilityGranted: accessibilityGranted,
             microphone: microphone)
     }
 
@@ -111,6 +113,15 @@ struct PreflightTests {
         #expect(report(world, inputMonitoringGranted: false).failures.map(\.check) == [.inputMonitoring])
     }
 
+    /// Injected the same way the Input Monitoring grant is, so the report stays a pure
+    /// function of its configuration and the trust query is never called globally.
+    @Test("a withheld Accessibility grant fails its check")
+    func deniedAccessibilityFails() throws {
+        let world = try World()
+        defer { world.tearDown() }
+        #expect(report(world, accessibilityGranted: false).failures.map(\.check) == [.accessibility])
+    }
+
     /// The device query is injected as a value, the way the Input Monitoring grant is,
     /// so an unusable microphone is testable with no real microphone involved.
     @Test(
@@ -158,7 +169,8 @@ struct PreflightTests {
             credentials: missing.appendingPathComponent(".credentials.json"),
             cache: WhisperModelCache(hub: missing))
         let report = Preflight.run(
-            configuration: configuration, inputMonitoringGranted: false, microphone: .noDevice)
+            configuration: configuration, inputMonitoringGranted: false,
+            accessibilityGranted: false, microphone: .noDevice)
         let expected = PreflightCheck.allCases.count - PreflightCheck.microphoneChecks.count + 1
         #expect(report.failures.count == expected)
         #expect(report.failures.map(\.check).contains(.microphoneDevice))
@@ -187,6 +199,19 @@ struct PreflightTests {
         let world = try World()
         defer { world.tearDown() }
         let report = report(world, microphone: state)
+        #expect(report.hasFailedPrerequisite)
+        #expect(!report.needsPermission)
+    }
+
+    /// Accessibility is not the hotkey going deaf — braindump is whole without it, and
+    /// only the auto-paste is lost — so it takes no tier of its own. It aggregates with
+    /// every other missing prerequisite, and the banner is where it says which one and
+    /// what specifically stops working.
+    @Test("a withheld Accessibility grant raises the aggregate failed tier, not the lock")
+    func accessibilitySurfacesOnFailedTier() throws {
+        let world = try World()
+        defer { world.tearDown() }
+        let report = report(world, accessibilityGranted: false)
         #expect(report.hasFailedPrerequisite)
         #expect(!report.needsPermission)
     }
@@ -220,6 +245,7 @@ struct PreflightTests {
     func onlyTheOwnedProblemsAreFixable() {
         #expect(PreflightCheck.whisperModel.fix == .downloadWhisperModel)
         #expect(PreflightCheck.inputMonitoring.fix == .openInputMonitoringSettings)
+        #expect(PreflightCheck.accessibility.fix == .openAccessibilitySettings)
         #expect(PreflightCheck.microphonePermission.fix == .openMicrophoneSettings)
         #expect(PreflightCheck.microphoneLevel.fix == .openSoundSettings)
         for check in [PreflightCheck.mlxWhisper, .ffmpeg, .claude, .claudeLogin, .microphoneDevice] {
@@ -245,5 +271,16 @@ struct PreflightTests {
     func everyCheckIsPresentable(check: PreflightCheck) {
         #expect(!check.title.isEmpty)
         #expect(!check.detail.isEmpty)
+    }
+
+    /// The banner must name the auto-paste specifically, never a generic "something is
+    /// wrong" — which would be a lie, since braindump is entirely fine without the
+    /// grant. Asserted on the copy itself because the copy *is* the requirement.
+    @Test("the Accessibility row names the dictation paste, and says what still works")
+    func accessibilityRowNamesTheAutoPaste() {
+        let detail = PreflightCheck.accessibility.detail
+        #expect(detail.contains("ditado"))
+        #expect(detail.contains("cola"))
+        #expect(detail.contains("clipboard"))
     }
 }

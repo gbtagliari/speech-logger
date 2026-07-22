@@ -115,6 +115,7 @@ struct PanelView: View {
     private func fix(_ check: PreflightCheck) {
         switch check.fix {
         case .openInputMonitoringSettings: viewModel.onOpenSettings()
+        case .openAccessibilitySettings: viewModel.onOpenAccessibilitySettings()
         case .openMicrophoneSettings: viewModel.onOpenMicrophoneSettings()
         case .openSoundSettings: viewModel.onOpenSoundSettings()
         case .downloadWhisperModel: viewModel.onDownloadModel()
@@ -215,7 +216,7 @@ private struct PreflightFailureView: View {
     /// `failed`, since it is not the hotkey going deaf (`PreflightReport`).
     private var glyphName: String {
         switch check {
-        case .inputMonitoring, .microphonePermission:
+        case .inputMonitoring, .accessibility, .microphonePermission:
             return "exclamationmark.lock"
         case .mlxWhisper, .ffmpeg, .claude, .claudeLogin, .whisperModel,
             .microphoneDevice, .microphoneLevel:
