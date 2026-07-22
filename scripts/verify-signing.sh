@@ -20,7 +20,11 @@ WORKSPACE="SpeechLogger.xcworkspace"
 SCHEME="SpeechLogger"
 DERIVED="$(mktemp -d)"
 trap 'rm -rf "${DERIVED}"' EXIT
-APP="${DERIVED}/Build/Products/Debug/SpeechLogger.app"
+# `CONFIGURATION_BUILD_DIR` in Project.swift redirects the products here, out of
+# the derived data directory, so the temp `-derivedDataPath` holds intermediates
+# only. Both builds below therefore overwrite this same path.
+PRODUCTS="builds/Debug"
+APP="${PRODUCTS}/SpeechLogger.app"
 
 if [ ! -d "${WORKSPACE}" ]; then
   echo "workspace not found; run 'tuist generate' first." >&2
@@ -28,7 +32,7 @@ if [ ! -d "${WORKSPACE}" ]; then
 fi
 
 clean_build() {
-  rm -rf "${DERIVED:?}/Build"
+  rm -rf "${DERIVED:?}/Build" "${PRODUCTS:?}"
   xcodebuild build \
     -workspace "${WORKSPACE}" -scheme "${SCHEME}" \
     -configuration Debug -destination 'platform=macOS' \
