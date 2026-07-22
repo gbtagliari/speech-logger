@@ -38,6 +38,8 @@ final class PanelViewModel: ObservableObject {
     var onOpenFolder: (String) -> Void = { _ in }
     /// Deep-link to the Input Monitoring pane (degraded state).
     var onOpenSettings: () -> Void = {}
+    /// Deep-link to the Accessibility pane, for a withheld dictation-paste grant.
+    var onOpenAccessibilitySettings: () -> Void = {}
     /// Deep-link to the Microphone privacy pane, for a denied microphone grant.
     var onOpenMicrophoneSettings: () -> Void = {}
     /// Deep-link to the Sound pane, for a muted or gainless input device.

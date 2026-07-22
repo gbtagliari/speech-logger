@@ -119,6 +119,88 @@ struct TranscriptionLaneTests {
         #expect(collector.delivered.isEmpty)
     }
 
+    // MARK: - The dictation that produced nothing (#43)
+
+    /// The other of the sound's two meanings. A dictation that dies has no text at all,
+    /// so there is nothing on the clipboard and nothing to paste — and with no sound it
+    /// would be indistinguishable from the app having heard nothing.
+    @Test("a failed dictation is announced, with no transcript to deliver")
+    func failedDictationIsAnnounced() async throws {
+        let store = try makeStore()
+        let id = try queuedItem(in: store, mode: .dictation)
+        let collector = Collector()
+        let lane = TranscriptionLane(
+            store: store,
+            transcriber: ThrowingTranscriber(error: .emptyOutput(detail: "")),
+            onDictationReady: { collector.addDelivered($0) },
+            onDictationUndelivered: { collector.bumpUndelivered() })
+
+        await lane.enqueue(id)
+        await lane.waitUntilIdle()
+
+        #expect(try store.meta(for: id).state == .failed)
+        #expect(collector.undelivered == 1)
+        // Nothing is delivered, so the clipboard is never touched: above the floor with
+        // no text, the sound is the whole signal.
+        #expect(collector.delivered.isEmpty)
+    }
+
+    @Test("a failed braindump is silent: the sound belongs to the mode staring at a cursor")
+    func failedBraindumpIsSilent() async throws {
+        let store = try makeStore()
+        let id = try queuedItem(in: store)
+        let collector = Collector()
+        let lane = TranscriptionLane(
+            store: store,
+            transcriber: ThrowingTranscriber(error: .emptyOutput(detail: "")),
+            onDictationUndelivered: { collector.bumpUndelivered() })
+
+        await lane.enqueue(id)
+        await lane.waitUntilIdle()
+
+        #expect(try store.meta(for: id).state == .failed)
+        #expect(collector.undelivered == 0)
+    }
+
+    /// You stopped it, so you already know. A sound here would report your own click
+    /// back to you.
+    @Test("a stopped dictation is silent: cancelling is not a failure")
+    func cancelledDictationIsSilent() async throws {
+        let store = try makeStore()
+        let id = try queuedItem(in: store, mode: .dictation)
+        let collector = Collector()
+        let lane = TranscriptionLane(
+            store: store,
+            transcriber: BlockingTranscriber(),
+            onDictationUndelivered: { collector.bumpUndelivered() })
+
+        await lane.enqueue(id)
+        try await waitUntil { (try? store.meta(for: id))?.state == .transcribing }
+        await lane.cancel(id)
+        await lane.waitUntilIdle()
+
+        #expect(try store.meta(for: id).state == .cancelled)
+        #expect(collector.undelivered == 0)
+    }
+
+    @Test("a delivered dictation is silent: the text landing is the confirmation")
+    func deliveredDictationIsSilent() async throws {
+        let store = try makeStore()
+        let id = try queuedItem(in: store, mode: .dictation)
+        let collector = Collector()
+        let lane = TranscriptionLane(
+            store: store,
+            transcriber: FakeTranscriber(log: CallLog(), writesOutput: true),
+            onDictationReady: { collector.addDelivered($0) },
+            onDictationUndelivered: { collector.bumpUndelivered() })
+
+        await lane.enqueue(id)
+        await lane.waitUntilIdle()
+
+        #expect(collector.delivered == ["raw transcript"])
+        #expect(collector.undelivered == 0)
+    }
+
     @Test("a dictation makes zero LLM invocations, with organization wired up and live")
     func dictationInvokesNoLLM() async throws {
         // The mode's defining property, asserted where an LLM would actually be
@@ -390,6 +472,7 @@ private final class Collector: @unchecked Sendable {
     private let lock = NSLock()
     private var _transcribed: [String] = []
     private var _delivered: [String] = []
+    private var _undelivered = 0
     private var _stateChanges = 0
 
     func addTranscribed(_ id: String) {
@@ -405,6 +488,16 @@ private final class Collector: @unchecked Sendable {
     var delivered: [String] {
         lock.lock(); defer { lock.unlock() }
         return _delivered
+    }
+
+    func bumpUndelivered() {
+        lock.lock(); defer { lock.unlock() }
+        _undelivered += 1
+    }
+
+    var undelivered: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _undelivered
     }
 
     func bumpState() {

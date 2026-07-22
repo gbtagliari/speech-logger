@@ -15,6 +15,10 @@ public enum PreflightCheck: String, Sendable, Equatable, CaseIterable {
     case whisperModel
     /// Input Monitoring is granted, so the hotkey can hear (ADR-0004).
     case inputMonitoring
+    /// Accessibility is granted, so a dictation can be pasted at the cursor (ADR-0007).
+    /// The paste and nothing else: capture keeps Input Monitoring, and braindump needs
+    /// neither this check nor anything else new.
+    case accessibility
     /// The microphone grant is given, so the mic can open at all.
     case microphonePermission
     /// An input device exists to record from.
@@ -38,6 +42,7 @@ public enum PreflightCheck: String, Sendable, Equatable, CaseIterable {
         case .claudeLogin: return "claude não está logado"
         case .whisperModel: return "modelo do Whisper não baixado"
         case .inputMonitoring: return "Monitoramento de Entrada desativado"
+        case .accessibility: return "Acessibilidade desativada"
         case .microphonePermission: return "sem acesso ao microfone"
         case .microphoneDevice: return "nenhum microfone conectado"
         case .microphoneLevel: return "microfone mudo ou sem ganho"
@@ -49,6 +54,11 @@ public enum PreflightCheck: String, Sendable, Equatable, CaseIterable {
     /// The three microphone lines name the *device* problem, never "nada foi ouvido" —
     /// the point of querying the device is to say what to fix instead of reporting an
     /// absence after the fact.
+    ///
+    /// The Accessibility line names the auto-paste and then says what still works. It is
+    /// the one row reporting a capability that is *partly* lost, and a generic "algo
+    /// está errado" would be a lie: without the grant the braindump is whole and the
+    /// dictation still records, transcribes and writes the clipboard.
     public var detail: String {
         switch self {
         case .mlxWhisper: return "Sem ele não há transcrição. Instale com `brew install mlx-whisper`."
@@ -57,6 +67,9 @@ public enum PreflightCheck: String, Sendable, Equatable, CaseIterable {
         case .claudeLogin: return "A organização falha até você rodar `claude login` no terminal."
         case .whisperModel: return "São ~1,5 GB, uma vez só. Depois a transcrição roda offline."
         case .inputMonitoring: return "O atalho fica surdo até você permitir."
+        case .accessibility:
+            return "O ditado não cola no cursor até você permitir. Gravar, transcrever e "
+                + "o clipboard seguem funcionando, e o braindump não usa isso."
         case .microphonePermission:
             return "A gravação é recusada até você liberar o microfone para o app."
         case .microphoneDevice:
@@ -81,6 +94,7 @@ public enum PreflightCheck: String, Sendable, Equatable, CaseIterable {
         switch self {
         case .whisperModel: return .downloadWhisperModel
         case .inputMonitoring: return .openInputMonitoringSettings
+        case .accessibility: return .openAccessibilitySettings
         case .microphonePermission: return .openMicrophoneSettings
         case .microphoneLevel: return .openSoundSettings
         case .mlxWhisper, .ffmpeg, .claude, .claudeLogin, .microphoneDevice: return nil
@@ -108,6 +122,8 @@ extension MicrophoneState {
 public enum PreflightFix: Sendable, Equatable {
     /// Deep-link to the Input Monitoring pane in System Settings.
     case openInputMonitoringSettings
+    /// Deep-link to the Accessibility pane in System Settings, where the paste grant lives.
+    case openAccessibilitySettings
     /// Deep-link to the Microphone privacy pane in System Settings.
     case openMicrophoneSettings
     /// Deep-link to the Sound pane, where the input device and its volume live.
@@ -120,6 +136,7 @@ public enum PreflightFix: Sendable, Equatable {
     public var title: String {
         switch self {
         case .openInputMonitoringSettings: return "Abrir Ajustes do Sistema…"
+        case .openAccessibilitySettings: return "Abrir Ajustes do Sistema…"
         case .openMicrophoneSettings: return "Abrir Ajustes do Sistema…"
         case .openSoundSettings: return "Abrir Ajustes de Som…"
         case .downloadWhisperModel: return "Baixar modelo"
@@ -168,6 +185,11 @@ public struct PreflightReport: Sendable, Equatable {
     /// Input Monitoring is denied: the hotkey is deaf. Its own menubar tier
     /// (`needsPermission`), because it is the one failure with a one-click fix and a
     /// specific glyph to say so.
+    ///
+    /// Accessibility is a permission too and deliberately does **not** join it. This
+    /// tier means the app cannot hear the key at all; a withheld paste grant costs one
+    /// capability of one mode and leaves everything else working, so it aggregates
+    /// below like any other missing prerequisite. The menubar ladder stays mode-agnostic.
     public var needsPermission: Bool {
         !(results.first { $0.check == .inputMonitoring }?.isSatisfied ?? true)
     }
@@ -221,12 +243,17 @@ public enum Preflight {
     ///   - inputMonitoringGranted: `CGPreflightListenEventAccess()`, never the Settings
     ///     toggle — the toggle lies after a DR-invalidating rebuild (ADR-0005). Passed
     ///     in because it is a CoreGraphics call and this target is pure.
+    ///   - accessibilityGranted: `AXIsProcessTrusted()` (ADR-0007), injected for the
+    ///     same reason — the report stays a pure function of its configuration, and the
+    ///     trust query is never called globally from in here. It answers one question:
+    ///     may a dictation be pasted at the cursor.
     ///   - microphone: the device as it reports itself (AVFoundation + CoreAudio),
     ///     injected for the same reason. A dead mic is read from the hardware, never
     ///     inferred from a recording that came back silent.
     public static func run(
         configuration: PreflightConfiguration = .defaults,
         inputMonitoringGranted: Bool,
+        accessibilityGranted: Bool,
         microphone: MicrophoneState
     ) -> PreflightReport {
         // Presence only, never executability: a plain `stat` check. A binary that is
@@ -240,6 +267,7 @@ public enum Preflight {
             PreflightResult(
                 check: .whisperModel, isSatisfied: configuration.cache.isCached(model: Transcriber.model)),
             PreflightResult(check: .inputMonitoring, isSatisfied: inputMonitoringGranted),
+            PreflightResult(check: .accessibility, isSatisfied: accessibilityGranted),
         ]
         // One state, several rows: whichever device problem is there is the only one
         // reported, so the banner names what to fix instead of listing everything a
