@@ -32,7 +32,19 @@ let appSigningSettings: SettingsDictionary = [
 
 let project = Project(
     name: "SpeechLogger",
-    settings: .settings(base: ["SWIFT_VERSION": "6.0"]),
+    // Built products land in `builds/<Configuration>/` at the repo root instead of
+    // being buried in derived data, so the app is easy to find and launch after
+    // `tuist build SpeechLogger`. Intermediates stay in derived data. `builds/` is
+    // gitignored.
+    //
+    // `CONFIGURATION_BUILD_DIR`, not `SYMROOT`: tuist passes `-derivedDataPath` on
+    // the xcodebuild command line, and that overrides a project-level `SYMROOT`.
+    // Set on the project base so every target shares one products directory —
+    // targets with divergent product dirs fail to link against each other.
+    settings: .settings(base: [
+        "SWIFT_VERSION": "6.0",
+        "CONFIGURATION_BUILD_DIR": "$(SRCROOT)/builds/$(CONFIGURATION)",
+    ]),
     targets: [
         .target(
             name: "SpeechLogger",

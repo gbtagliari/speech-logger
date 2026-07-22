@@ -63,9 +63,12 @@ First-time setup and build:
 scripts/create-signing-identity.sh   # one-time: self-signed cert for stable signing (ADR-0005)
 tuist generate                       # produces SpeechLogger.xcworkspace
 tuist test                           # run the test suite
-tuist build SpeechLogger             # build the app
+tuist build SpeechLogger             # build the app -> builds/Debug/SpeechLogger.app
 scripts/verify-signing.sh            # assert sandbox-off + stable designated requirement
 ```
+
+Built products land in `builds/<Configuration>/` (gitignored), so `open
+builds/Debug/SpeechLogger.app` launches the app you just built.
 
 The self-signed identity is what keeps the Input Monitoring grant alive across rebuilds; a
 local, non-quarantined build launches without notarization. See `docs/adr/` for the decisions.
