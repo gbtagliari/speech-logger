@@ -1,7 +1,7 @@
 import SpeechLoggerCore
 import SwiftUI
 
-/// The menubar dropdown panel: three sections built from `PanelModel`, plus the
+/// The menubar dropdown panel: four sections built from `PanelModel`, plus the
 /// degraded Input-Monitoring banner and a footer. A thin render of `PanelViewModel`
 /// — no pipeline logic lives here.
 struct PanelView: View {
@@ -428,7 +428,7 @@ private struct NeedsRowView: View {
 
 // MARK: - Dictation row
 
-/// A settled dictation (#44): the transcript when it finished, the death line when it
+/// A terminal dictation (#44): the transcript when it finished, the death line when it
 /// did not. Click-to-copy on the finished ones, retry on the dead ones, and never
 /// reprocess — the mode has no LLM run to start over, so the entry is not in the menu.
 private struct DictationRowView: View {
@@ -486,13 +486,9 @@ private struct DictationRowView: View {
         }
     }
 
-    private var tint: Color {
-        switch row.kind {
-        case .done: return .secondary
-        case .failed: return .orange
-        case .cancelled: return .secondary
-        }
-    }
+    /// Amber for a failure, grey otherwise — the same two-way tint `NeedsRowView` uses,
+    /// so a dead dictation looks like every other dead item.
+    private var tint: Color { row.kind == .failed ? .orange : .secondary }
 
     private var textTint: Color { row.kind == .failed ? .orange : .primary }
 }

@@ -251,7 +251,10 @@ final class ItemStoreTests {
         _ = try store.sweepExpiredDictations(
             at: old.meta.created.addingTimeInterval(Retention.dictationWindow + 1))
         #expect(!FileManager.default.fileExists(atPath: dir.path))
-        // Trash it landed in, not oblivion: findable by name under ~/.Trash.
+        // The one assertion that has to leave the temp root: "went to the Trash" is only
+        // observable in the real Trash, and it is the acceptance criterion. Safe to look
+        // there because the directory name is a ULID — it cannot collide with anything —
+        // and the test takes its own litter back out.
         let trashed = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".Trash", isDirectory: true)
             .appendingPathComponent(old.id, isDirectory: true)

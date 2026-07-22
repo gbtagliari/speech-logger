@@ -11,9 +11,10 @@ import Foundation
 ///   of its final pass-2 text. Braindumps only.
 /// - *Precisam de você* (`needsYou`): failed and cancelled items, newest first, with
 ///   retry offered only where there is something to resume. Braindumps only.
-/// - *Ditados* (`dictations`): every settled dictation, newest first (#44).
+/// - *Ditados* (`dictations`): every dictation that has reached a terminal state,
+///   newest first (#44).
 ///
-/// Settled dictations are kept out of the braindump log deliberately: the log is the
+/// Terminal dictations are kept out of the braindump log deliberately: the log is the
 /// record of formed thought, and a mode used dozens of times a day would bury it under
 /// throwaway commands. They rejoin it while in flight, where the subject is the lane
 /// and not the text.
@@ -25,7 +26,7 @@ public struct PanelModel: Equatable, Sendable {
 
     public init(
         live: [LiveRow], ready: [ReadyRow], needsYou: [NeedsRow],
-        dictations: [DictationRow] = []
+        dictations: [DictationRow]
     ) {
         self.live = live
         self.ready = ready
@@ -81,9 +82,9 @@ public struct PanelModel: Equatable, Sendable {
         public let timeText: String
     }
 
-    /// A settled dictation (#44). One row shape for all three terminals, because the
-    /// section is a single list the user scans for the text they just spoke: a finished
-    /// one reads as its transcript, a dead one as how it died.
+    /// A dictation that has reached a terminal state (#44). One row shape for all three
+    /// terminals, because the section is a single list the user scans for the text they
+    /// just spoke: a finished one reads as its transcript, a dead one as how it died.
     ///
     /// There is no `isReprocessable`: reprocess exists to start the LLM run over and the
     /// mode has no LLM run, so the control is absent from the type rather than carried
@@ -144,8 +145,11 @@ public struct PanelModel: Equatable, Sendable {
                     timeText: CompactRelativeTime.text(from: item.meta.created, now: now))
             }
 
-        // The braindump log's two settled sections exclude dictations by mode; the
-        // dictation section takes every settled one, whichever terminal it reached.
+        // *Precisam de você* excludes dictations by mode, since both off-ramps are
+        // shared. *Prontos* needs no such filter: `organized` is a state a dictation
+        // cannot reach at all (`ItemMode.reaches`), so the state test is already the
+        // mode test. The dictation section takes every terminal dictation, whichever of
+        // the three terminals it reached.
         let needsYou = items
             .filter { $0.meta.mode == .braindump }
             .filter { $0.state == .failed || $0.state == .cancelled }
@@ -181,49 +185,51 @@ public struct PanelModel: Equatable, Sendable {
     }
 
     private static func needsRow(_ item: Item, now: Date) -> NeedsRow {
-        let timeText = CompactRelativeTime.text(from: item.meta.created, now: now)
-        switch item.state {
-        case .cancelled:
-            let stage = item.meta.stoppedAt?.stage
-            return NeedsRow(
-                id: item.id, kind: .cancelled,
-                label: "Cancelado na \(stageLabel(stage))",
-                isRetryable: item.isRetryable, isReprocessable: item.isReprocessable,
-                timeText: timeText)
-        default:  // .failed (callers pass only failed/cancelled)
-            let reason = item.meta.error?.reason
-            return NeedsRow(
-                id: item.id, kind: .failed,
-                label: "Falhou · \(reasonLabel(reason))",
-                isRetryable: item.isRetryable, isReprocessable: item.isReprocessable,
-                timeText: timeText)
-        }
+        NeedsRow(
+            id: item.id,
+            kind: item.state == .cancelled ? .cancelled : .failed,
+            label: deathLabel(item),
+            isRetryable: item.isRetryable, isReprocessable: item.isReprocessable,
+            timeText: CompactRelativeTime.text(from: item.meta.created, now: now))
     }
 
-    /// The row for a settled dictation: its transcript if it finished, otherwise the
-    /// same death line the braindump log uses, so a failure reads identically in both
-    /// places (#44).
+    /// The row for a terminal dictation: its transcript if it finished, otherwise the
+    /// death line — literally the same one the braindump log shows, since both sections
+    /// call `deathLabel`, so a failure reads identically wherever it is found (#44).
     private static func dictationRow(
         _ item: Item, now: Date, outputText: (String) -> String?
     ) -> DictationRow {
         let timeText = CompactRelativeTime.text(from: item.meta.created, now: now)
         switch item.state {
         case .transcribed:
+            // Retry is never offered here, for the same reason it is never offered on an
+            // organized braindump: nothing died, so there is no stage to resume. A clean
+            // dictation that came out wrong is re-spoken, which is two seconds' work.
             return DictationRow(
                 id: item.id, kind: .done,
                 label: ReadyPreview.clamp(outputText(item.id) ?? ""),
                 isCopyable: true, isRetryable: false, timeText: timeText)
         case .cancelled:
             return DictationRow(
-                id: item.id, kind: .cancelled,
-                label: "Cancelado na \(stageLabel(item.meta.stoppedAt?.stage))",
+                id: item.id, kind: .cancelled, label: deathLabel(item),
                 isCopyable: false, isRetryable: item.isRetryable, timeText: timeText)
-        default:  // .failed (callers pass only settled dictations, and `organized` is unreachable)
+        case .failed, .recording, .queued, .transcribing, .organizing, .organized:
+            // Only `failed` actually arrives: callers pass terminal dictations, and a
+            // dictation reaches neither `organizing` nor `organized`. Enumerated rather
+            // than defaulted so a new state cannot quietly render as a failure.
             return DictationRow(
-                id: item.id, kind: .failed,
-                label: "Falhou · \(reasonLabel(item.meta.error?.reason))",
+                id: item.id, kind: .failed, label: deathLabel(item),
                 isCopyable: false, isRetryable: item.isRetryable, timeText: timeText)
         }
+    }
+
+    /// The pt-BR line for a dead item, shared by *Precisam de você* and the dictation
+    /// list: a cancellation names where the user stopped it, a failure names why it
+    /// broke. One home, so the two sections cannot drift apart.
+    private static func deathLabel(_ item: Item) -> String {
+        item.state == .cancelled
+            ? "Cancelado na \(stageLabel(item.meta.stoppedAt?.stage))"
+            : "Falhou · \(reasonLabel(item.meta.error?.reason))"
     }
 
     // MARK: - pt-BR labels

@@ -7,7 +7,7 @@ import Testing
 /// *Acontecendo agora* (recording + queued/transcribing/organizing, both modes),
 /// *Prontos* (organized, clamped preview, newest first), *Precisam de você* (failed +
 /// cancelled, with retry only where there is something to resume), and *Ditados* (every
-/// settled dictation, kept out of the braindump log — #44).
+/// terminal dictation, kept out of the braindump log — #44).
 struct PanelModelTests {
     private let base = Date(timeIntervalSince1970: 1_000_000)
 
@@ -173,7 +173,7 @@ struct PanelModelTests {
 
     // MARK: - The dictation list (#44)
 
-    @Test("settled dictations get their own section, out of Prontos and Precisam de você")
+    @Test("terminal dictations get their own section, out of Prontos and Precisam de você")
     func dictationsKeptOutOfTheBraindumpLog() {
         let items = [
             item("d-done", created: base, state: .transcribed, mode: .dictation),
@@ -198,7 +198,7 @@ struct PanelModelTests {
         ]
         let model = PanelModel.build(items: items, now: base, outputText: noText)
         #expect(model.live.map(\.id) == ["d", "b"])
-        // It is not in the dictation list yet: that section is the record of settled ones.
+        // It is not in the dictation list yet: that section is the record of terminal ones.
         #expect(model.dictations.isEmpty)
     }
 
