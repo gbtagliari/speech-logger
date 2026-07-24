@@ -1,6 +1,6 @@
 import Foundation
 
-/// The dual guard's verdict on a finished recording.
+/// The guard's verdict on a finished recording.
 public enum GuardDecision: Sendable, Equatable {
     /// Long enough and loud enough: encode it and queue it.
     case accept
@@ -13,11 +13,28 @@ public enum GuardDecision: Sendable, Equatable {
     /// microphone is detected directly instead (#45). Discarding also keeps digital
     /// silence out of `mlx_whisper`, which hallucinates on it.
     case discardSilent
+    /// The capture received nothing: no frame arrived, or every window read exactly
+    /// zero. **A failure, not a silence** (#54) — the item lands `failed` at stage
+    /// `recording` with reason `empty_output` and is never discarded.
+    ///
+    /// Digital zero is not a quiet room. A live microphone always measures a noise
+    /// floor (0.0015 internal, 0.007 on a Bluetooth headset); exact zero throughout is
+    /// the absence of a measurement. It happens under microphone contention, when
+    /// `AVAudioEngine` binds the input node to a fallback sample rate the device is not
+    /// running at: nothing throws, and the capture comes back empty.
+    ///
+    /// It is visible on purpose. The user spoke, and the app owes them a line saying so
+    /// — where discarding it as a short tap deleted a whole braindump with no trace.
+    case failEmptyCapture
 }
 
-/// Gates a finished recording before transcription on two axes: a minimum duration
-/// and a windowed energy test. Pure logic — the caller measures during capture and
-/// asks the guard what to do.
+/// Gates a finished recording before transcription on three axes, in this order: what
+/// the capture *received*, a minimum duration, and a windowed energy test. Pure logic —
+/// the caller measures during capture and asks the guard what to do.
+///
+/// Received-nothing comes first and is the only axis that fails rather than discards.
+/// A capture that got no frames measures 0.00 s, so any other ordering would report it
+/// as an accidental tap and delete the recording invisibly (#54).
 ///
 /// The energy verdict is *the fraction of ~20 ms windows above a floor*, not a
 /// running peak and not a global average. A peak lets one key click, cough or door
@@ -72,17 +89,40 @@ public struct RecordingGuard: Sendable {
     /// transient. At 5% a lone spike is still discarded there, and the sparsest
     /// measured speech clears the bar five times over.
     public let minimumLoudFraction: Double
+    /// How long a run of nothing but exact zeros a device is allowed before the sequence
+    /// stops reading as a warm-up and starts reading as a dead capture. In windows, since
+    /// that is what is being counted; the default is stated as the duration it comes from.
+    ///
+    /// Measured, and load-bearing: **every** real recording opens with a run of exact
+    /// zeros while the device spins up — 37 windows on the silent double-tap, 34 on
+    /// normal speech, 27 on the short utterance (`RecordedEnergy`), which is 0.54 s to
+    /// 0.74 s of them. A recording shorter than its device's warm-up is *entirely* zeros
+    /// while being perfectly healthy, so without this allowance a fat-fingered tap would
+    /// come back as a `failed` item — the litter #46 exists to prevent.
+    ///
+    /// The default is one second: a third clear of the longest run measured, and the
+    /// length of the braindump duration floor, so nothing that survives that floor is
+    /// judged by a rule tuned for something shorter. It costs the ticket's case nothing —
+    /// a capture that received no *frames* is caught before this, at any length.
+    ///
+    /// An **allowance**, not a minimum: a sequence has to run *past* it, which is why the
+    /// comparison is the one exclusive boundary in this type.
+    public let warmUpWindowAllowance: Int
 
     public init(
         braindumpMinimumDuration: TimeInterval = 1.0,
         dictationMinimumDuration: TimeInterval = 0.35,
         loudWindowFloor: Float = 0.02,
-        minimumLoudFraction: Double = 0.05
+        minimumLoudFraction: Double = 0.05,
+        // Derived rather than written as 50, so "one second" is the code and not a
+        // comment that a later tuning of the window size could quietly falsify.
+        warmUpWindowAllowance: Int = Int(1.0 / RecordingCapture.windowDuration)
     ) {
         self.braindumpMinimumDuration = braindumpMinimumDuration
         self.dictationMinimumDuration = dictationMinimumDuration
         self.loudWindowFloor = loudWindowFloor
         self.minimumLoudFraction = minimumLoudFraction
+        self.warmUpWindowAllowance = warmUpWindowAllowance
     }
 
     /// The floor the gesture's mode earns.
@@ -93,13 +133,36 @@ public struct RecordingGuard: Sendable {
         }
     }
 
-    /// Decide the recording's fate from its mode, its duration and its per-window
-    /// energies. Duration is checked first, so a too-short tap reads as
+    /// Decide the recording's fate from its mode, its duration, the frames it received
+    /// and its per-window energies.
+    ///
+    /// **A dead capture is judged before anything else** (#54). Its duration is 0.00 s
+    /// by arithmetic — frames over sample rate — so a duration-first ordering reported
+    /// it as `discardTooShort` and made a lost braindump indistinguishable from a
+    /// fat-fingered double-tap. Nothing about a capture that received nothing may be
+    /// inferred from the length it appears to have.
+    ///
+    /// The one thing that verdict will not do is fire on a recording too short to have
+    /// outlasted the device's warm-up, which is all exact zeros while being healthy —
+    /// see `warmUpWindowAllowance`. A capture that received no frames is caught
+    /// whatever its length; a capture that received *zeros* has to have run long enough
+    /// for that to mean something.
+    ///
+    /// After that, duration comes before energy, so a too-short tap reads as
     /// `discardTooShort` whatever its energy — both verdicts discard, and the
     /// distinction is for the reader, not for the outcome.
+    ///
+    /// The three measurements arrive loose rather than as the `RecordingCapture` they
+    /// come from, on purpose: the capture also carries the wav's URL, and this seam is
+    /// the one place the whole verdict is decided *without hardware*, replaying window
+    /// sequences recorded from a real microphone as fixtures (#46). A file that has to
+    /// exist for a threshold to be swept would cost more than the four arguments do.
     public func evaluate(
-        mode: ItemMode, duration: TimeInterval, windowEnergies: [Float]
+        mode: ItemMode, duration: TimeInterval, frames: Int, windowEnergies: [Float]
     ) -> GuardDecision {
+        if receivedNothing(frames: frames, windowEnergies: windowEnergies) {
+            return .failEmptyCapture
+        }
         guard duration >= minimumDuration(for: mode) else { return .discardTooShort }
         // Measuring nothing is not measuring silence. An empty sequence means the
         // capture could not read the device's sample format at all, which says
@@ -113,5 +176,27 @@ public struct RecordingGuard: Sendable {
         }
         let fraction = Double(loud) / Double(windowEnergies.count)
         return fraction >= minimumLoudFraction ? .accept : .discardSilent
+    }
+
+    /// Whether the capture received nothing at all: no frame arrived, or frames arrived
+    /// and every window they produced — enough of them to rule out a warm-up — read
+    /// exactly zero.
+    ///
+    /// Two shapes of the same failure, because contention produces both: a tap that is
+    /// never called, and a tap called with buffers of digital zero. The first is
+    /// unconditional. The second is read off *exact* equality across the **whole**
+    /// sequence, and only once the sequence is longer than `warmUpWindowAllowance` —
+    /// every real recording opens with a run of exact zeros while the device warms up, so
+    /// neither a leading run of them nor a whole short recording of them proves anything.
+    /// One window that measured something proves the device was delivering, and the
+    /// recording is then judged on its energy like any other.
+    ///
+    /// An empty sequence with frames received is the third case and is *not* this one:
+    /// it means the capture could not read the device's sample format, which says
+    /// nothing about the audio — see the note in `evaluate`.
+    private func receivedNothing(frames: Int, windowEnergies: [Float]) -> Bool {
+        if frames == 0 { return true }
+        guard windowEnergies.count > warmUpWindowAllowance else { return false }
+        return windowEnergies.allSatisfy { $0 == 0 }
     }
 }

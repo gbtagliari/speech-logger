@@ -344,7 +344,9 @@ private let rerunFinalText = FakeOrganizer.rewritten("ANNOTATED[raw transcript]"
     func stop() -> RecordingCapture {
         let url = wav!
         wav = nil
-        return RecordingCapture(wav: url, duration: 8, windowEnergies: Array(repeating: 0.09, count: 400))
+        return RecordingCapture(
+            wav: url, duration: 8, frames: 8 * 48000,
+            windowEnergies: Array(repeating: 0.09, count: 400))
     }
 }
 

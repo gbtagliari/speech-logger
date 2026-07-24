@@ -92,4 +92,19 @@ enum RecordedEnergy {
         0.032610, 0.076741, 0.131125, 0.153583, 0.156221, 0.132579, 0.108615, 0.088978, 0.072190,
         0.074890, 0.074773, 0.060246, 0.045219, 0.020350, 0.004233, 0.003147
     ]
+
+    /// A capture that received nothing: 5 s of windows, **every one exactly zero** (#54).
+    ///
+    /// Not a dumped file but the measured signature written out — under microphone
+    /// contention `AVAudioEngine` resolves the input node to its 44.1 kHz fallback while
+    /// the device runs at 16 kHz, and the tap then delivers either no buffer at all or
+    /// buffers of digital zero. The harness in #54 reproduced it 8 times out of 8 and
+    /// the per-window energy was `0.000000` exactly, never a small number.
+    ///
+    /// That exactness is the whole discriminator, and the three recordings above are
+    /// what license it: each opens with a run of exact zeros while the device warms up
+    /// and then never reads zero again. A live microphone measures a noise floor —
+    /// 0.0015 on the internal microphone, 0.007 on a Bluetooth headset. Zero throughout
+    /// is the absence of a measurement, not a quiet room.
+    static let deadCapture = [Float](repeating: 0, count: 250)
 }

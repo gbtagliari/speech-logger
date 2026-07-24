@@ -7,22 +7,47 @@ import os
 /// feeds `ffmpeg`, which downmixes to mono/16 kHz (ADR-0002) — the app records
 /// native and does not resample itself.
 ///
-/// While recording it accumulates the two measurements the dual guard needs: the
-/// per-window RMS sequence and the frame count (for duration). The audio tap runs on
-/// a real-time thread, so that state lives behind a lock in `CaptureState`.
+/// While recording it accumulates the measurements the guard needs: the per-window RMS
+/// sequence and the frame count (which gives both the duration and, at zero, the fact
+/// that the capture received nothing). The audio tap runs on a real-time thread, so that
+/// state lives behind a lock in `CaptureState`.
+///
+/// The engine is **not** a constant, and the input node's format is **not** taken on
+/// trust (#54). One `AVAudioEngine` lives for the whole process, so it outlives every
+/// device change the user makes, and under microphone contention it resolves the input
+/// node to a 44.1 kHz fallback while the device runs at another rate — then delivers
+/// zero frames, with nothing throwing anywhere. Both are addressed here: the format is
+/// confronted with the device before a recording opens against it, and a configuration
+/// change drops the binding so the next recording builds a fresh engine.
 @MainActor final class AudioRecorder: AudioRecording {
     enum RecorderError: Error {
         case microphoneAccessDenied
         case engineFailed(String)
     }
 
+    /// How far the engine's sample rate may sit from the device's and still be believed.
+    /// Both are doubles the drivers computed, so this is a float comparison, not a
+    /// tolerance for genuinely different rates: the failure it catches is 44100 against
+    /// 16000, not 48000.0 against 47999.9.
+    private static let sampleRateTolerance: Double = 1
+
     private let log = Logger(subsystem: "app.speech-logger", category: "recorder")
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
+    /// The `AVAudioEngineConfigurationChange` subscription, re-registered whenever the
+    /// engine is rebuilt (the notification is posted by a specific engine).
+    private var configurationObserver: (any NSObjectProtocol)?
+    /// Set when the audio graph changed under us: the engine's binding to the device is
+    /// stale, and the next recording rebuilds rather than reuses it.
+    private var isEngineStale = false
     /// Off unless `SPEECH_LOGGER_ENERGY_DUMP` is set; see `EnergyDump`.
     private let energyDump = EnergyDump()
     private var state: CaptureState?
     private var wavURL: URL?
     private var sampleRate: Double = 0
+
+    init() {
+        observeConfigurationChanges()
+    }
 
     func start() throws(RecorderError) {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -38,8 +63,8 @@ import os
             throw RecorderError.microphoneAccessDenied
         }
 
+        let format = verifiedInputFormat()  // native (e.g. 48 kHz stereo)
         let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)  // native (e.g. 48 kHz stereo)
         sampleRate = format.sampleRate
 
         let url = FileManager.default.temporaryDirectory
@@ -93,7 +118,104 @@ import os
         sampleRate = 0
 
         energyDump.write(snapshot.windowEnergies)
-        return RecordingCapture(wav: url, duration: duration, windowEnergies: snapshot.windowEnergies)
+        return RecordingCapture(
+            wav: url, duration: duration, frames: Int(snapshot.frames),
+            windowEnergies: snapshot.windowEnergies)
+    }
+
+    // MARK: - The engine's binding to the device (#54)
+
+    /// A format worth opening a recording against: the input node's, confronted with the
+    /// device first, off an engine that is not stale.
+    ///
+    /// The single owner of "is this engine's binding to the hardware still good", so
+    /// `start` asks one question instead of sequencing two.
+    ///
+    /// `outputFormat(forBus: 0)` is what `AVAudioEngine` *resolved*, not what the device
+    /// is running. Under contention — another process holding the input, or having just
+    /// released it, which is what leaving a Meet does — the two disagree, and the engine
+    /// then delivers zero frames while every call on the way in succeeds. A fresh engine
+    /// re-resolves against the current default input device, so a disagreement is worth
+    /// one rebuild.
+    ///
+    /// If they still disagree the recording proceeds anyway. That is the same asymmetry
+    /// the rest of the app is built on: refusing here costs a thought on a microphone
+    /// that might have worked, while proceeding costs, at worst, a `failed` item the
+    /// user can see — which is precisely what the guard's dead-capture verdict is for.
+    private func verifiedInputFormat() -> AVAudioFormat {
+        // A configuration change already invalidated the binding: rebuild before asking
+        // the node anything, rather than confronting a format we know is stale.
+        if isEngineStale { rebuildEngine() }
+        let format = engine.inputNode.outputFormat(forBus: 0)
+        // No device rate to compare against is an unknown, and an unknown is believed:
+        // the same rule the microphone check follows for a property it cannot read.
+        guard let deviceRate = Microphone.defaultInputSampleRate,
+            !agrees(format, with: deviceRate)
+        else { return format }
+
+        log.warning(
+            """
+            input node at \(format.sampleRate, privacy: .public) Hz against a device at \
+            \(deviceRate, privacy: .public) Hz; rebuilding the engine
+            """)
+        rebuildEngine()
+        let rebuilt = engine.inputNode.outputFormat(forBus: 0)
+        if !agrees(rebuilt, with: deviceRate) {
+            log.error(
+                """
+                input node still at \(rebuilt.sampleRate, privacy: .public) Hz after the \
+                rebuild; recording anyway, and a capture that receives nothing will fail \
+                the item visibly
+                """)
+        }
+        return rebuilt
+    }
+
+    /// Whether the engine resolved the input to the rate the device is actually running.
+    private func agrees(_ format: AVAudioFormat, with deviceRate: Double) -> Bool {
+        abs(format.sampleRate - deviceRate) <= Self.sampleRateTolerance
+    }
+
+    /// Drop the engine and build a fresh one, re-subscribing to its configuration
+    /// changes. Only ever called between recordings — the coordinator makes recording
+    /// exclusive — so there is no live tap to tear down.
+    private func rebuildEngine() {
+        engine.stop()
+        engine = AVAudioEngine()
+        isEngineStale = false
+        observeConfigurationChanges()
+    }
+
+    /// Watch for the audio graph changing under the engine: a device plugged, unplugged,
+    /// or switched by the user, or the sample rate moving. Nothing in the app observed
+    /// this before, and one engine lives for the whole process, so a stale binding could
+    /// outlive every device change the user made.
+    ///
+    /// The engine is not rebuilt here. A change can arrive mid-recording, where a rebuild
+    /// would throw away the capture in flight; marking it stale defers the rebuild to the
+    /// next `start`, which is the only moment a fresh engine is worth anything.
+    ///
+    /// The previous subscription is removed here and nowhere else: there is no `deinit`,
+    /// because a `@MainActor` class cannot touch a non-`Sendable` token from a nonisolated
+    /// one. Bounded on purpose — one recorder lives for the whole process, exactly one
+    /// subscription is registered at a time, and the block holds `self` weakly, so an
+    /// outliving observer could not reach a freed recorder anyway.
+    private func observeConfigurationChanges() {
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+        }
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { [weak self] _ in
+            // Posted on whatever thread the change arrived on; hop to the actor that
+            // owns the flag.
+            Task { @MainActor in self?.markEngineStale() }
+        }
+    }
+
+    private func markEngineStale() {
+        isEngineStale = true
+        log.notice("audio configuration changed; the engine will be rebuilt on the next recording")
     }
 }
 

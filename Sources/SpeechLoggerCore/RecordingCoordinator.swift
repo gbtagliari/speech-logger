@@ -149,13 +149,26 @@ public protocol AudioEncoding: Sendable {
         onStateChange?()
     }
 
-    /// Apply the dual guard, then encode-and-queue, discard, or fail. The temp wav
+    /// Apply the guard, then encode-and-queue, discard, or fail. The temp wav
     /// is always removed on the way out — the mp3 is the retained artifact.
     private func process(id: String, mode: ItemMode, capture: RecordingCapture) async {
         defer { try? FileManager.default.removeItem(at: capture.wav) }
 
         switch guardCheck.evaluate(
-            mode: mode, duration: capture.duration, windowEnergies: capture.windowEnergies) {
+            mode: mode, duration: capture.duration, frames: capture.frames,
+            windowEnergies: capture.windowEnergies) {
+        case .failEmptyCapture:
+            // The device gave us nothing while reporting itself usable (#54). The user
+            // spoke and there is no audio to encode, so this is the one guard verdict
+            // that leaves a visible item: `empty_output`, the same name the
+            // post-transcription net uses, because an absent capture and a corrupt one
+            // produce the identical signal and naming a cause never observed would
+            // claim more than the evidence supports.
+            _ = try? store.fail(
+                id, stage: .recording, reason: .emptyOutput,
+                detail: "the microphone delivered no audio: \(capture.frames) frame(s), "
+                    + "\(capture.windowEnergies.count) window(s)",
+                mode: mode)
         case .discardTooShort, .discardSilent:
             // Nothing was said, or nothing was meant: either way it never becomes a
             // visible log item. A recording with no speech in it leaves nothing
@@ -171,7 +184,8 @@ public protocol AudioEncoding: Sendable {
                 onQueued?(id)  // hand the item to the serial transcription lane
             } catch {
                 _ = try? store.fail(
-                    id, stage: .recording, reason: .cliError, detail: "encode failed: \(error)")
+                    id, stage: .recording, reason: .cliError, detail: "encode failed: \(error)",
+                    mode: mode)
             }
         }
         onStateChange?()

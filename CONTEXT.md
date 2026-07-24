@@ -58,7 +58,9 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
     (`timeout` is reserved; nothing ships that produces it in the MVP). There is no `no_speech`:
     a recording with no speech in it is **discarded**, not failed (#46). `empty_output` keeps its
     name rather than absorbing that meaning, because corrupt audio produces the identical
-    signal — an empty transcript — and "no speech" would assert a cause never observed.
+    signal — an empty transcript — and "no speech" would assert a cause never observed. It is
+    also what a **dead capture** fails with, at stage `recording` (#54), for the same reason: an
+    absent capture and a corrupt one are the same signal.
 
 - **The two passes** — how organization works, and the reason this tool exists (ADR-0001).
   **Braindump only**; dictation has no LLM in its path.
@@ -110,8 +112,25 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   unusable device **refuses the recording**: it is the one thing that turns the hotkey down, on the
   grounds that capturing while knowing nothing will arrive is manufacturing the loss on purpose.
   Every unknown (a device with no mute or volume property) reads as `usable` — a false "unusable"
-  costs a thought, a false "usable" costs a recording. **Accepted residual:** a device that is
-  present, unmuted and gained but receiving nothing is undetectable this way.
+  costs a thought, a false "usable" costs a recording. A device that is present, unmuted and
+  gained but **receiving nothing** is not knowable as a device fact, so it is caught at the
+  capture instead, as a **dead capture** (#54) — not tolerated, just detected elsewhere.
+
+- **Dead capture** — a capture that received nothing: no frame arrived, or every energy window
+  read *exactly* zero over a recording long enough for that to mean something. **A failure, not a
+  silence** (#54). It happens under microphone contention, where `AVAudioEngine` binds its input
+  node to a 44.1 kHz fallback while the device runs at another rate and then delivers nothing,
+  with no call throwing anywhere. Digital zero is not a quiet room: a live microphone always
+  measures a noise floor (0.0015 internal, 0.007 on a Bluetooth headset), so exact zero
+  throughout is the absence of a measurement. The one exception is the **warm-up**: every
+  recording opens with 0.5–0.75 s of exact zeros while the device spins up, so a capture shorter
+  than that is all zeros and perfectly healthy, and only the no-frames shape is judged at any
+  length. The recorder defends against it twice — the input node's format is confronted with the
+  default input device's nominal rate before a recording opens against it, and an
+  `AVAudioEngineConfigurationChange` drops the stale binding so the next recording rebuilds the
+  engine. When it happens anyway the item **fails** (`stage: recording`, `reason: empty_output`)
+  and is never discarded: the user spoke, and a silent discard is the one outcome that deletes a
+  braindump with no trace.
 
 - **Item directory** — storage is plain files, one directory per item (ADR-0003), no database.
   Holds `audio.mp3`, the three text stages, `pass1.txt` (the annotated pivot), and `meta.json`
@@ -163,9 +182,11 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   loud window, and what fraction is enough — live at the **one seam** in `RecordingGuard`, which is
   what makes offline calibration against recorded fixtures possible, and both err toward accepting:
   a false "has speech" costs one hallucinated item you delete, a false "silent" deletes real speech
-  invisibly. **Accepted residual:** the test passes and Whisper hallucinates rather than returning
-  empty, so the post-transcription `empty_output` net does not fire and the item carries invented
-  text. That is the tolerated direction of error, chosen over silent deletion.
+  invisibly. The guard judges the **dead capture** before either the duration floor or the energy
+  test, since a capture that received nothing measures 0.00 s and any other ordering reports it as
+  an accidental tap. **Accepted residual:** the test passes and Whisper hallucinates rather than
+  returning empty, so the post-transcription `empty_output` net does not fire and the item carries
+  invented text. That is the tolerated direction of error, chosen over silent deletion.
 
 - **Passthrough** — the app **cannot swallow** the gesture; the key also reaches the frontmost app.
   Benign — verified for a tap (ADR-0004) and for a multi-second hold on 3 targets (#35): no character,
