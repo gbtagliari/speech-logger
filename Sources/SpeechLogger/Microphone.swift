@@ -72,6 +72,40 @@ enum Microphone {
         return rate
     }
 
+    /// Force the default input device's nominal sample rate, so the device re-publishes
+    /// its format and a freshly built engine resolves its input node against a live rate
+    /// instead of the 44.1 kHz fallback it cached under contention (#59). Returns the
+    /// rate the device reports *after* the write, or nil when there is no device or it
+    /// will not accept the rate.
+    ///
+    /// Global scope, to match the read: the nominal rate belongs to the device, not to
+    /// its input streams. Settability is checked before the write — a device that does
+    /// not let its rate be set answers nil rather than swallowing an error — and the
+    /// truth returned is the read-back, not the value asked for, because the write can
+    /// report `noErr` on a device that never actually reconciled.
+    static func forceDefaultInputSampleRate(_ rate: Double) -> Double? {
+        guard let device = defaultInputDevice else { return nil }
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var settable = DarwinBoolean(false)
+        guard AudioObjectHasProperty(device, &address),
+            AudioObjectIsPropertySettable(device, &address, &settable) == noErr,
+            settable.boolValue
+        else { return nil }
+        var value = Float64(rate)
+        let status = AudioObjectSetPropertyData(
+            device, &address, 0, nil, UInt32(MemoryLayout<Float64>.size), &value)
+        guard status == noErr else { return nil }
+        return defaultInputSampleRate
+    }
+
+    /// The system's current default input device id, for the one caller that must reach
+    /// the hardware directly — the AUHAL re-resolution in `AudioRecorder` (#59). Every
+    /// other question about the device is answered by the readers above.
+    static var defaultInputDeviceID: AudioDeviceID? { defaultInputDevice }
+
     /// Open System Settings straight to the Microphone privacy pane. The anchored
     /// legacy form, the same one `InputMonitoring.openSettings` already relies on.
     static func openPrivacySettings() {

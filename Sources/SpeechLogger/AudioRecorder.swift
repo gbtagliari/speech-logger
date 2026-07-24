@@ -1,4 +1,6 @@
 import AVFoundation
+import AudioToolbox
+import CoreAudio
 import ObjCExceptionBridge
 import SpeechLoggerCore
 import os
@@ -17,9 +19,16 @@ import os
 /// trust (#54). One `AVAudioEngine` lives for the whole process, so it outlives every
 /// device change the user makes, and under microphone contention it resolves the input
 /// node to a 44.1 kHz fallback while the device runs at another rate — then delivers
-/// zero frames, with nothing throwing anywhere. Both are addressed here: the format is
-/// confronted with the device before a recording opens against it, and a configuration
-/// change drops the binding so the next recording builds a fresh engine.
+/// zero frames, with nothing throwing anywhere. The format is confronted with the device
+/// before a recording opens against it, and a configuration change drops the binding so
+/// the next recording rebuilds.
+///
+/// Rebuilding alone does not clear that fallback, though — the AUHAL keeps the stale rate
+/// across a fresh engine and even across a process restart (#59). So a disagreement is
+/// answered by *forcing* the device to re-publish its format
+/// (`Microphone.forceDefaultInputSampleRate`) and re-pointing the input AUHAL at it
+/// (`reresolveInputAgainstDevice`), not by rebuilding and hoping. The decision behind
+/// that force lives in `SampleRateReconciler`, a hardware-free seam.
 ///
 /// **Nothing in `start` may terminate the process** (#55). The same contention makes
 /// `installTapOnBus` reject a format by raising an `NSException`, which Swift cannot
@@ -42,6 +51,11 @@ import os
     private static let sampleRateTolerance: Double = 1
 
     private let log = Logger(subsystem: "app.speech-logger", category: "recorder")
+    /// Reconciles the engine's cached input rate with the device's actual rate, forcing
+    /// the device to re-publish when they disagree (#59). The device it forces is a seam,
+    /// so the flow is unit-tested without hardware; this recorder owns only the CoreAudio
+    /// conformer and the engine rebuild the decision triggers.
+    private let reconciler: SampleRateReconciler
     private var engine = AVAudioEngine()
     /// The `AVAudioEngineConfigurationChange` subscription, re-registered whenever the
     /// engine is rebuilt (the notification is posted by a specific engine).
@@ -55,7 +69,11 @@ import os
     private var wavURL: URL?
     private var sampleRate: Double = 0
 
-    init() {
+    /// The device seam is injected so the reconciliation flow is testable without
+    /// hardware; production takes the CoreAudio conformer. The tolerance is shared with
+    /// the post-rebuild check below so the two agree on what "the same rate" means.
+    init(device: any InputDeviceRate = CoreAudioInputDevice()) {
+        reconciler = SampleRateReconciler(device: device, tolerance: Self.sampleRateTolerance)
         observeConfigurationChanges()
     }
 
@@ -184,10 +202,17 @@ import os
     ///
     /// `outputFormat(forBus: 0)` is what `AVAudioEngine` *resolved*, not what the device
     /// is running. Under contention — another process holding the input, or having just
-    /// released it, which is what leaving a Meet does — the two disagree, and the engine
-    /// then delivers zero frames while every call on the way in succeeds. A fresh engine
-    /// re-resolves against the current default input device, so a disagreement is worth
-    /// one rebuild.
+    /// released it, which is what leaving a Meet does — the two disagree, the engine pins
+    /// its input node to a 44.1 kHz fallback, and then it delivers zero frames while
+    /// every call on the way in succeeds.
+    ///
+    /// #54 rebuilt the engine and hoped a fresh one would re-resolve. It does not: the
+    /// AUHAL keeps the stale fallback across the rebuild, and even a full process restart
+    /// stays stuck until the device re-publishes its format (#59). So the disagreement is
+    /// not answered by rebuilding but by *forcing* the device's nominal rate — which
+    /// makes it re-publish — and only then rebuilding, so the fresh engine resolves
+    /// against a live format. The rebuild additionally re-points the input AUHAL at the
+    /// device (`rebuildEngine`), the other half of clearing the fallback.
     ///
     /// If they still disagree the recording proceeds anyway. That is the same asymmetry
     /// the rest of the app is built on: refusing here costs a thought on a microphone
@@ -197,44 +222,85 @@ import os
         // A configuration change already invalidated the binding: rebuild before asking
         // the node anything, rather than confronting a format we know is stale.
         if isEngineStale { rebuildEngine() }
-        let format = engine.inputNode.outputFormat(forBus: 0)
-        // No device rate to compare against is an unknown, and an unknown is believed:
-        // the same rule the microphone check follows for a property it cannot read.
-        guard let deviceRate = Microphone.defaultInputSampleRate,
-            !agrees(format, with: deviceRate)
-        else { return engine.inputNode }
+        let engineRate = engine.inputNode.outputFormat(forBus: 0).sampleRate
 
-        log.warning(
-            """
-            input node at \(format.sampleRate, privacy: .public) Hz against a device at \
-            \(deviceRate, privacy: .public) Hz; rebuilding the engine
-            """)
+        // The rate to reconcile against, once the reconciler has (or has not) forced the
+        // device to re-publish. Either disagreement leads to the same recovery — rebuild,
+        // which re-points the input AUHAL at the live device — because the AUHAL re-point
+        // does not hinge on the device write having taken. `.notNeeded` is the only exit
+        // that skips it: the engine already agrees, or there is no device rate to confront
+        // it with, and an unknown is believed (the rule the microphone check follows too).
+        let deviceRate: Double
+        switch reconciler.reconcile(engineRate: engineRate) {
+        case .notNeeded:
+            return engine.inputNode
+        case .forced(let rate):
+            log.warning(
+                """
+                input node at \(engineRate, privacy: .public) Hz against a device at \
+                \(rate, privacy: .public) Hz; forced the device rate and rebuilding
+                """)
+            deviceRate = rate
+        case .failed(let rate):
+            log.warning(
+                """
+                input node at \(engineRate, privacy: .public) Hz against a device at \
+                \(rate, privacy: .public) Hz that would not take a forced rate; \
+                re-pointing the AUHAL and rebuilding
+                """)
+            deviceRate = rate
+        }
+
         rebuildEngine()
-        let rebuilt = engine.inputNode.outputFormat(forBus: 0)
-        if !agrees(rebuilt, with: deviceRate) {
+        let rebuilt = engine.inputNode.outputFormat(forBus: 0).sampleRate
+        if abs(rebuilt - deviceRate) > Self.sampleRateTolerance {
+            // The device never re-published a rate the engine picked up. Record anyway:
+            // the guard's dead-capture verdict fails the item where the user can see it,
+            // which is the last resort #54 exists to be.
             log.error(
                 """
-                input node still at \(rebuilt.sampleRate, privacy: .public) Hz after the \
-                rebuild; recording anyway, and a capture that receives nothing will fail \
-                the item visibly
+                input node still at \(rebuilt, privacy: .public) Hz after reconciling \
+                against \(deviceRate, privacy: .public) Hz; recording anyway, and a \
+                capture that receives nothing will fail the item visibly
                 """)
         }
         return engine.inputNode
     }
 
-    /// Whether the engine resolved the input to the rate the device is actually running.
-    private func agrees(_ format: AVAudioFormat, with deviceRate: Double) -> Bool {
-        abs(format.sampleRate - deviceRate) <= Self.sampleRateTolerance
-    }
-
     /// Drop the engine and build a fresh one, re-subscribing to its configuration
-    /// changes. Only ever called between recordings — the coordinator makes recording
-    /// exclusive — so there is no live tap to tear down.
+    /// changes and re-pointing its input at the live device. Only ever called between
+    /// recordings — the coordinator makes recording exclusive — so there is no live tap
+    /// to tear down.
     private func rebuildEngine() {
         engine.stop()
         engine = AVAudioEngine()
         isEngineStale = false
         observeConfigurationChanges()
+        reresolveInputAgainstDevice()
+    }
+
+    /// Re-point the input AUHAL at the current default input device, forcing it to
+    /// re-read that device's stream format instead of carrying the fallback a fresh
+    /// engine still resolves to on its own (#59). Setting the current device — even to
+    /// the same id — is what makes the AUHAL reconcile; a bare `AVAudioEngine()` does
+    /// not. The other half is `Microphone.forceDefaultInputSampleRate`, which makes the
+    /// device re-publish in the first place.
+    ///
+    /// Best-effort and never fatal: a device that cannot be re-pointed leaves the engine
+    /// exactly where the bare rebuild left it, and the post-rebuild check in
+    /// `verifiedInputNode` still catches a rate that never reconciled.
+    private func reresolveInputAgainstDevice() {
+        guard let deviceID = Microphone.defaultInputDeviceID,
+            let audioUnit = engine.inputNode.audioUnit
+        else { return }
+        var device = deviceID
+        let status = AudioUnitSetProperty(
+            audioUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+            &device, UInt32(MemoryLayout<AudioDeviceID>.size))
+        if status != noErr {
+            log.notice(
+                "could not re-point the input AUHAL at the default device (status \(status, privacy: .public))")
+        }
     }
 
     /// Watch for the audio graph changing under the engine: a device plugged, unplugged,

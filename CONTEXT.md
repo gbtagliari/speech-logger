@@ -125,10 +125,12 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   throughout is the absence of a measurement. The one exception is the **warm-up**: every
   recording opens with 0.5–0.75 s of exact zeros while the device spins up, so a capture shorter
   than that is all zeros and perfectly healthy, and only the no-frames shape is judged at any
-  length. The recorder defends against it twice — the input node's format is confronted with the
+  length. The recorder confronts the input node's format with the
   default input device's nominal rate before a recording opens against it, and an
-  `AVAudioEngineConfigurationChange` drops the stale binding so the next recording rebuilds the
-  engine. When it happens anyway the item **fails** (`stage: recording`, `reason: empty_output`)
+  `AVAudioEngineConfigurationChange` marks the binding stale so the next recording rebuilds. A
+  rebuild alone does not clear the fallback, though (#59): a disagreement **forces** the device's
+  nominal rate so it re-publishes its format, and re-points the input AUHAL at the live device.
+  When it delivers nothing even after that the item **fails** (`stage: recording`, `reason: empty_output`)
   and is never discarded: the user spoke, and a silent discard is the one outcome that deletes a
   braindump with no trace.
 
