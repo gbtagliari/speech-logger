@@ -51,60 +51,33 @@ enum Microphone {
         return .usable
     }
 
-    /// The default input device's nominal sample rate, or nil when there is no device
-    /// or it does not report one.
+    /// The default input device's own name ("soundcore Life Q30"), or nil when there is
+    /// no device or it does not publish one.
     ///
-    /// The rate the *device* is running at, which is not always the rate `AVAudioEngine`
-    /// binds its input node to: under contention the engine falls back to 44.1 kHz while
-    /// the device runs at something else, and then delivers nothing (#54). This is the
-    /// second opinion that makes that disagreement visible before a recording opens
-    /// against it.
-    static var defaultInputSampleRate: Double? {
-        guard let device = defaultInputDevice,
-            // Global scope: the nominal rate belongs to the device, not to its input
-            // streams, and the input-scoped read the mute and volume checks use is not
-            // guaranteed to answer for it.
-            let rate = property(
-                kAudioDevicePropertyNominalSampleRate, of: device,
-                scope: kAudioObjectPropertyScopeGlobal, initial: Float64(0)),
-            rate > 0
-        else { return nil }
-        return rate
-    }
-
-    /// Force the default input device's nominal sample rate, so the device re-publishes
-    /// its format and a freshly built engine resolves its input node against a live rate
-    /// instead of the 44.1 kHz fallback it cached under contention (#59). Returns the
-    /// rate the device reports *after* the write, or nil when there is no device or it
-    /// will not accept the rate.
+    /// Read for one purpose: a recording-stage failure the user can act on (#63). When
+    /// the engine could not get the device to deliver, "the microphone delivered no
+    /// audio" sends them looking, while naming the headset tells them which one to take
+    /// off. It informs no decision, so an absent name costs nothing.
     ///
-    /// Global scope, to match the read: the nominal rate belongs to the device, not to
-    /// its input streams. Settability is checked before the write — a device that does
-    /// not let its rate be set answers nil rather than swallowing an error — and the
-    /// truth returned is the read-back, not the value asked for, because the write can
-    /// report `noErr` on a device that never actually reconciled.
-    static func forceDefaultInputSampleRate(_ rate: Double) -> Double? {
+    /// Global scope, because the name belongs to the device rather than to a stream, and
+    /// `Unmanaged` because this property answers with a `CFString` the caller owns —
+    /// `takeRetainedValue` is what consumes that +1.
+    static var defaultInputDeviceName: String? {
         guard let device = defaultInputDevice else { return nil }
         var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mSelector: kAudioObjectPropertyName,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
-        var settable = DarwinBoolean(false)
-        guard AudioObjectHasProperty(device, &address),
-            AudioObjectIsPropertySettable(device, &address, &settable) == noErr,
-            settable.boolValue
-        else { return nil }
-        var value = Float64(rate)
-        let status = AudioObjectSetPropertyData(
-            device, &address, 0, nil, UInt32(MemoryLayout<Float64>.size), &value)
-        guard status == noErr else { return nil }
-        return defaultInputSampleRate
+        guard AudioObjectHasProperty(device, &address) else { return nil }
+        var name: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let status = withUnsafeMutablePointer(to: &name) {
+            AudioObjectGetPropertyData(device, &address, 0, nil, &size, $0)
+        }
+        guard status == noErr, let name else { return nil }
+        let string = name.takeRetainedValue() as String
+        return string.isEmpty ? nil : string
     }
-
-    /// The system's current default input device id, for the one caller that must reach
-    /// the hardware directly — the AUHAL re-resolution in `AudioRecorder` (#59). Every
-    /// other question about the device is answered by the readers above.
-    static var defaultInputDeviceID: AudioDeviceID? { defaultInputDevice }
 
     /// Open System Settings straight to the Microphone privacy pane. The anchored
     /// legacy form, the same one `InputMonitoring.openSettings` already relies on.
@@ -160,10 +133,10 @@ enum Microphone {
         return volume <= 0.0001
     }
 
-    /// Read one property of `device` on the main element, or nil when the device does
-    /// not implement it. The scope defaults to input, which is what mute and volume are
-    /// asked in. `mElement` is the master control; per-channel volume without a
-    /// master reads as absent, which lands on "usable" by design.
+    /// Read one input-scoped property of `device` on the main element, or nil when the
+    /// device does not implement it. Input scope is what mute and volume are asked in,
+    /// and they are the only two readers. `mElement` is the master control; per-channel
+    /// volume without a master reads as absent, which lands on "usable" by design.
     ///
     /// The size the driver actually wrote is checked, not assumed: a short write with
     /// `noErr` would otherwise leave the tail of `value` unread-from-the-driver, and a
@@ -171,12 +144,11 @@ enum Microphone {
     /// `initial` is the value that survives a partial read being rejected — chosen as
     /// the *usable* reading of each property, so every escape hatch here agrees.
     private static func property<T>(
-        _ selector: AudioObjectPropertySelector, of device: AudioDeviceID,
-        scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeInput, initial: T
+        _ selector: AudioObjectPropertySelector, of device: AudioDeviceID, initial: T
     ) -> T? {
         var address = AudioObjectPropertyAddress(
             mSelector: selector,
-            mScope: scope,
+            mScope: kAudioObjectPropertyScopeInput,
             mElement: kAudioObjectPropertyElementMain)
         guard AudioObjectHasProperty(device, &address) else { return nil }
         let expected = UInt32(MemoryLayout<T>.size)

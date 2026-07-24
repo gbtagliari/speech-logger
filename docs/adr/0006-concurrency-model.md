@@ -34,6 +34,14 @@ Rules that fall out:
   "recording wins the key" is untouched; the condition applies from idle only.
 - **The menubar icon is a strict priority ladder**, one state wins the glyph:
   `recording` > `failed` > `processing` (= `queued`/`transcribing`/`organizing`) > `idle`.
+
+  **Amended by #63.** `recording` in this ladder means **audio is arriving**, not that the gesture
+  happened. On a Bluetooth headset the two are 1.0–1.6 s apart, and on a device that never binds the
+  first frame never arrives at all — so a glyph tied to the gesture spent a whole braindump claiming
+  to record what nothing was capturing. The glyph and its running clock now wait for the first frame,
+  which makes the clock's *absence* the live signal that the device is not delivering. Exclusivity is
+  untouched: it, and the hotkey grammar, still key on the mic being open, which is a separate flag
+  (`isCapturing`). The ladder's order is unchanged.
 - **Quit never blocks.** Graceful quit marks in-flight processing items `cancelled` (resume from stage
   next launch) and kills their subprocesses; a crash/force-kill falls through to boot recovery as
   `failed`/`interrupted`; quit **while recording** discards the in-progress recording silently (a

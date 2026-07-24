@@ -59,4 +59,14 @@ public enum FailureReason: String, Codable, Sendable, CaseIterable {
     case missingBinary = "missing_binary"
     case interrupted
     case timeout
+    /// The audio device would not deliver, and the recorder knows it: it rebuilt the
+    /// engine trying to make it and the capture still received nothing (#63). Stage
+    /// `recording` only.
+    ///
+    /// Distinct from `empty_output` on purpose. `empty_output` is the name for an absent
+    /// or corrupt capture whose cause was never observed, and it is deliberately
+    /// non-committal. Here the cause *was* observed — a Bluetooth headset whose HFP link
+    /// never came up under the engine — and the detail names the device, which is the one
+    /// piece of information that lets the user do something about it.
+    case deviceUnavailable = "device_unavailable"
 }

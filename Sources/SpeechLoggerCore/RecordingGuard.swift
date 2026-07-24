@@ -15,13 +15,15 @@ public enum GuardDecision: Sendable, Equatable {
     case discardSilent
     /// The capture received nothing: no frame arrived, or every window read exactly
     /// zero. **A failure, not a silence** (#54) — the item lands `failed` at stage
-    /// `recording` with reason `empty_output` and is never discarded.
+    /// `recording` and is never discarded. Which reason it names is the caller's to
+    /// decide from the capture: `device_unavailable` when the recorder had to rebuild its
+    /// engine to try to make the device deliver, `empty_output` when it did not (#63).
     ///
     /// Digital zero is not a quiet room. A live microphone always measures a noise
     /// floor (0.0015 internal, 0.007 on a Bluetooth headset); exact zero throughout is
-    /// the absence of a measurement. It happens under microphone contention, when
-    /// `AVAudioEngine` binds the input node to a fallback sample rate the device is not
-    /// running at: nothing throws, and the capture comes back empty.
+    /// the absence of a measurement. It happens when `AVAudioEngine` never binds the
+    /// device it is pointed at — a Bluetooth headset whose HFP link is still coming up is
+    /// the measured case (#63): nothing throws, and the capture comes back empty.
     ///
     /// It is visible on purpose. The user spoke, and the app owes them a line saying so
     /// — where discarding it as a short tap deleted a whole braindump with no trace.
@@ -159,12 +161,14 @@ public struct RecordingGuard: Sendable {
     /// threshold to be swept would cost more than the loose arguments do.
     ///
     /// `deviceBindingFailed` is the #60 discriminator: a positive tell, from the recorder,
-    /// that the engine could not bind the device — its rate never reconciled at open (the
-    /// #59 rate mismatch) or the device dropped under the capture mid-gesture. It is what
-    /// lets a **short** dead capture — a device that opened then dropped inside the warm-up
-    /// window — be told apart from a fat-fingered tap, which duration alone cannot. It
-    /// defaults false so a caller with no such signal, and every replayed fixture, is
-    /// judged exactly as before.
+    /// that the engine could not bind the device. Since #63 it is one thing — the recorder
+    /// had to rebuild its engine mid-capture to try to make the device deliver — and never
+    /// a sample-rate comparison, which on the device that produced these tickets is a
+    /// comparison between a real rate and a fiction. It is what lets a **short** dead
+    /// capture — a device that opened then dropped inside the warm-up window — be told
+    /// apart from a fat-fingered tap, which duration alone cannot. It defaults false so a
+    /// caller with no such signal, and every replayed fixture, is judged exactly as
+    /// before.
     public func evaluate(
         mode: ItemMode, duration: TimeInterval, frames: Int, windowEnergies: [Float],
         deviceBindingFailed: Bool = false
