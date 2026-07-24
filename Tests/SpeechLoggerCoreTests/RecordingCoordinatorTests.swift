@@ -317,6 +317,117 @@ private final class Clock: @unchecked Sendable {
         #expect(try store.list()[0].state == .failed)
     }
 
+    // MARK: - A recording-stage death reports its mode (#57)
+
+    /// The signal the app turns into a sound for a dead dictation. The coordinator does
+    /// not play anything — AppKit stays out of this target — it names the death and its
+    /// mode, and the app decides. A dead capture is one of the two ways a recording dies
+    /// before it ever reaches a lane.
+    @Test("a dead capture reports the recording-stage failure with the item's mode", arguments: ItemMode.allCases)
+    func deadCaptureReportsMode(mode: ItemMode) async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        var failed: [ItemMode] = []
+        coordinator.onRecordingFailed = { failed.append($0) }
+        recorder.captureDuration = 0
+        recorder.captureFrames = 0
+        recorder.captureEnergies = []
+        coordinator.start()
+        await coordinator.stop(mode: mode)
+
+        #expect(failed == [mode])
+    }
+
+    /// The other death: audio arrived and cleared the guard, but the encode failed. From
+    /// the user's chair it is the same event as the dead capture — nothing landed — so it
+    /// reports identically, carrying the mode.
+    @Test("an encode failure reports the recording-stage failure with the item's mode", arguments: ItemMode.allCases)
+    func encodeFailureReportsMode(mode: ItemMode) async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator(encoder: StubEncoder(shouldFail: true))
+        var failed: [ItemMode] = []
+        coordinator.onRecordingFailed = { failed.append($0) }
+        coordinator.start()
+        await coordinator.stop(mode: mode)
+
+        #expect(failed == [mode])
+    }
+
+    /// The rule the sound already documents: a discard leaves no item, so nothing is
+    /// owed. A too-short tap and a silent room both discard, in either mode, and neither
+    /// reports a failure — the coordinator only reports the deaths that leave a `failed`
+    /// item behind.
+    @Test("a discarded recording reports no failure, in either mode", arguments: ItemMode.allCases)
+    func discardReportsNoFailure(mode: ItemMode) async throws {
+        defer { cleanup() }
+        var failed: [ItemMode] = []
+
+        let tooShort = makeCoordinator()
+        tooShort.onRecordingFailed = { failed.append($0) }
+        recorder.captureDuration = 0.1
+        tooShort.start()
+        await tooShort.stop(mode: mode)
+
+        let silent = makeCoordinator()
+        silent.onRecordingFailed = { failed.append($0) }
+        recorder.captureDuration = 8.0
+        recorder.captureEnergies = Array(repeating: 0.0004, count: 400)
+        silent.start()
+        await silent.stop(mode: mode)
+
+        #expect(failed.isEmpty)
+    }
+
+    /// The graceful-quit sweep discards an in-progress recording with no item left
+    /// behind, so it owes no sound either — the same rule, on the quit path.
+    @Test("the quit-sweep discard reports no failure, in either mode", arguments: ItemMode.allCases)
+    func quitSweepReportsNoFailure(mode: ItemMode) async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        var failed: [ItemMode] = []
+        coordinator.onRecordingFailed = { failed.append($0) }
+        recorder.captureDuration = 8.0
+        coordinator.start()
+        coordinator.discardIfRecording()
+
+        #expect(failed.isEmpty)
+        #expect(try store.list().isEmpty)
+    }
+
+    /// The happy path reports no failure: an accepted recording lands `queued` and its
+    /// signal is `onQueued`, not this.
+    @Test("an accepted recording reports no failure, in either mode", arguments: ItemMode.allCases)
+    func acceptReportsNoFailure(mode: ItemMode) async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        var failed: [ItemMode] = []
+        coordinator.onRecordingFailed = { failed.append($0) }
+        recorder.captureDuration = 8.0
+        coordinator.start()
+        await coordinator.stop(mode: mode)
+
+        #expect(failed.isEmpty)
+        #expect(try store.list()[0].state == .queued)
+    }
+
+    /// A refused recording stays silent too (#45, #57): nothing was captured and the
+    /// degraded banner already says why, so no item is left behind and no failure is
+    /// reported. Pinned rather than left to construction — the issue asked for this to be
+    /// decided out loud.
+    @Test("an unusable microphone refuses without reporting a failure", arguments: ItemMode.allCases)
+    func refusalReportsNoFailure(mode: ItemMode) async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        microphone.state = .silenced
+        var failed: [ItemMode] = []
+        coordinator.onRecordingFailed = { failed.append($0) }
+        coordinator.start()
+        await coordinator.stop(mode: mode)  // nothing to stop; the start was refused
+
+        #expect(failed.isEmpty)
+        #expect(try store.list().isEmpty)
+    }
+
     // MARK: - The mode the gesture earned (#42)
 
     @Test("the gesture's mode is what the item is recorded as, settled at the end")

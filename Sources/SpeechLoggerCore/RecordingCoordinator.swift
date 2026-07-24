@@ -57,6 +57,12 @@ public protocol AudioEncoding: Sendable {
     /// that refused it. Nothing was created and nothing was captured; the app stays
     /// idle and the hotkey keeps working.
     public var onRecordingRefused: (@MainActor (MicrophoneState) -> Void)?
+    /// Called when a recording-stage failure leaves a visible `failed` item — a dead
+    /// capture (#54) or a failed encode. Carries the item's mode so the app can sound
+    /// a dead dictation (#57) without this target learning AppKit: `onStateChange` fires
+    /// for every step including the discards, so it cannot tell a death from a no-op.
+    /// A discard leaves no item and never reaches here.
+    public var onRecordingFailed: (@MainActor (ItemMode) -> Void)?
 
     public init(
         store: ItemStore,
@@ -169,6 +175,7 @@ public protocol AudioEncoding: Sendable {
                 detail: "the microphone delivered no audio: \(capture.frames) frame(s), "
                     + "\(capture.windowEnergies.count) window(s)",
                 mode: mode)
+            onRecordingFailed?(mode)
         case .discardTooShort, .discardSilent:
             // Nothing was said, or nothing was meant: either way it never becomes a
             // visible log item. A recording with no speech in it leaves nothing
@@ -186,6 +193,7 @@ public protocol AudioEncoding: Sendable {
                 _ = try? store.fail(
                     id, stage: .recording, reason: .cliError, detail: "encode failed: \(error)",
                     mode: mode)
+                onRecordingFailed?(mode)
             }
         }
         onStateChange?()

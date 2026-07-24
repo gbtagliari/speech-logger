@@ -132,6 +132,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.log.error("recording refused; microphone is \(String(describing: state))")
             self?.refreshPreflight()
         }
+        // A recording-stage death (#57). For a dictation it is the sound's first meaning:
+        // the mode has no notification and no panel in view, so the sound is the only
+        // signal a failure ever reaches the user by. A braindump is silent here — it has
+        // the notification and the panel, so the asymmetry is about presence, not mode.
+        coordinator.onRecordingFailed = { [weak self] mode in
+            if mode == .dictation { self?.announceUndeliveredDictation() }
+        }
         self.coordinator = coordinator
 
         // The cross-cutting control of in-flight work (#22, ADR-0006): manual stop,
@@ -354,7 +361,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !isTrusted { refreshPreflight() }
     }
 
-    /// A dictation ended with no text to deliver — it failed, or its transcript could
+    /// A dictation ended with no text to deliver — it died at the recording stage (a dead
+    /// capture or a failed encode, #57), it failed in the lane, or its transcript could
     /// not be read back. Same sound, its other meaning: there is nothing to paste,
     /// nothing on the clipboard, and an empty field would otherwise be indistinguishable
     /// from the app having heard nothing at all.
