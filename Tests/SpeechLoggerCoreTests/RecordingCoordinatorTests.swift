@@ -12,6 +12,10 @@ private enum StubError: Error { case micDenied, encodeFailed }
     var captureDuration: TimeInterval = 8.0
     /// Window energies the guard will read. Default: sustained speech.
     var captureEnergies: [Float] = Array(repeating: 0.09, count: 400)
+    /// Frames received, if the test cares. Default: what `captureDuration` implies at
+    /// 48 kHz, so an ordinary capture is a live one and only a test that means to
+    /// simulate a dead device (#54) sets it to zero.
+    var captureFrames: Int?
     private(set) var startCount = 0
     private(set) var stopCount = 0
     private(set) var lastWav: URL?
@@ -31,7 +35,10 @@ private enum StubError: Error { case micDenied, encodeFailed }
         let wav = currentWav!
         currentWav = nil
         lastWav = wav
-        return RecordingCapture(wav: wav, duration: captureDuration, windowEnergies: captureEnergies)
+        return RecordingCapture(
+            wav: wav, duration: captureDuration,
+            frames: captureFrames ?? Int(captureDuration * 48000),
+            windowEnergies: captureEnergies)
     }
 }
 
@@ -178,7 +185,7 @@ private final class Clock: @unchecked Sendable {
         await coordinator.stop(mode: .braindump)
         // Long but silent: discarded too, no handoff.
         recorder.captureDuration = 8.0
-        recorder.captureEnergies = Array(repeating: 0.0, count: 400)
+        recorder.captureEnergies = Array(repeating: 0.0006, count: 400)
         coordinator.start()
         await coordinator.stop(mode: .braindump)
 
@@ -203,7 +210,7 @@ private final class Clock: @unchecked Sendable {
         #expect(states.contains(.recording))
     }
 
-    // MARK: - The dual guard
+    // MARK: - The guard
 
     @Test("a too-short tap is discarded silently: no item survives")
     func tooShortDiscarded() async throws {
@@ -246,6 +253,68 @@ private final class Clock: @unchecked Sendable {
         coordinator.start()
         await coordinator.stop(mode: .braindump)
         #expect(try store.list().isEmpty)
+    }
+
+    // MARK: - The dead capture (#54)
+
+    /// The failure mode in practice, and the one the guard's verdicts exist to keep
+    /// apart from an accidental tap: the device reports itself usable, the engine starts
+    /// without throwing, and not one frame arrives. It used to leave nothing at all — no
+    /// item, no error, no log line — however long the user had been speaking.
+    @Test("a capture that received nothing lands failed, not discarded", arguments: ItemMode.allCases)
+    func deadCaptureFails(mode: ItemMode) async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        recorder.captureDuration = 0  // frames / sampleRate, with no frames
+        recorder.captureFrames = 0
+        recorder.captureEnergies = []
+        coordinator.start()
+        await coordinator.stop(mode: mode)
+
+        let items = try store.list()
+        #expect(items.count == 1)
+        #expect(items[0].state == .failed)
+        #expect(items[0].meta.error?.stage == .recording)
+        #expect(items[0].meta.error?.reason == .emptyOutput)
+        #expect(items[0].meta.mode == mode)  // both modes, identically
+        #expect(!FileManager.default.fileExists(atPath: recorder.lastWav!.path))
+    }
+
+    @Test("a capture whose windows are all exactly zero fails, at a full braindump's length")
+    func deadCaptureWithZeroWindowsFails() async throws {
+        defer { cleanup() }
+        // The other shape of the same failure: buffers arrive and carry digital zero.
+        // Long enough to clear every duration floor, so only the received-nothing axis
+        // can catch it — and a real quiet room, which never reads exactly zero, still
+        // discards.
+        let coordinator = makeCoordinator()
+        recorder.captureDuration = 300
+        recorder.captureEnergies = Array(repeating: 0, count: 15000)
+        coordinator.start()
+        await coordinator.stop(mode: .braindump)
+
+        let items = try store.list()
+        #expect(items.count == 1)
+        #expect(items[0].state == .failed)
+        #expect(items[0].meta.error?.reason == .emptyOutput)
+    }
+
+    @Test("a dead capture never hands off to the transcription lane")
+    func deadCaptureDoesNotQueue() async throws {
+        defer { cleanup() }
+        // There is no audio to transcribe: the failure is terminal at the recording
+        // stage, and `mlx_whisper` hallucinates on the silence it would be handed.
+        let coordinator = makeCoordinator()
+        var queued: [String] = []
+        coordinator.onQueued = { queued.append($0) }
+        recorder.captureDuration = 0
+        recorder.captureFrames = 0
+        recorder.captureEnergies = []
+        coordinator.start()
+        await coordinator.stop(mode: .braindump)
+
+        #expect(queued.isEmpty)
+        #expect(try store.list()[0].state == .failed)
     }
 
     // MARK: - The mode the gesture earned (#42)

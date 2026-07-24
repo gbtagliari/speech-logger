@@ -137,12 +137,19 @@ public struct ItemStore: Sendable {
     }
 
     /// Terminal off-ramp: the item broke at `stage` for `reason`.
+    ///
+    /// `mode` settles the label on the way out, exactly as `markQueued` does and for the
+    /// same reason: an item that dies *at the recording stage* has never been labeled,
+    /// since the gesture only says which speech act it was at the end (#42). Without it
+    /// a dead dictation would land in the braindump log and outlive the seven-day sweep.
+    /// `nil` keeps whatever the item has — every stage past recording already knows.
     public func fail(
-        _ id: String, stage: Stage, reason: FailureReason, detail: String? = nil
+        _ id: String, stage: Stage, reason: FailureReason, detail: String? = nil,
+        mode: ItemMode? = nil
     ) throws(StoreError) -> ItemMeta {
-        try persist(
-            try meta(for: id).failing(stage: stage, reason: reason, detail: detail, at: now()),
-            for: id)
+        let failed = try meta(for: id).failing(
+            stage: stage, reason: reason, detail: detail, at: now())
+        return try persist(mode.map { failed.labeled(as: $0) } ?? failed, for: id)
     }
 
     /// Terminal off-ramp: the user stopped the item at `stage`.

@@ -51,6 +51,27 @@ enum Microphone {
         return .usable
     }
 
+    /// The default input device's nominal sample rate, or nil when there is no device
+    /// or it does not report one.
+    ///
+    /// The rate the *device* is running at, which is not always the rate `AVAudioEngine`
+    /// binds its input node to: under contention the engine falls back to 44.1 kHz while
+    /// the device runs at something else, and then delivers nothing (#54). This is the
+    /// second opinion that makes that disagreement visible before a recording opens
+    /// against it.
+    static var defaultInputSampleRate: Double? {
+        guard let device = defaultInputDevice,
+            // Global scope: the nominal rate belongs to the device, not to its input
+            // streams, and the input-scoped read the mute and volume checks use is not
+            // guaranteed to answer for it.
+            let rate = property(
+                kAudioDevicePropertyNominalSampleRate, of: device,
+                scope: kAudioObjectPropertyScopeGlobal, initial: Float64(0)),
+            rate > 0
+        else { return nil }
+        return rate
+    }
+
     /// Open System Settings straight to the Microphone privacy pane. The anchored
     /// legacy form, the same one `InputMonitoring.openSettings` already relies on.
     static func openPrivacySettings() {
@@ -105,8 +126,9 @@ enum Microphone {
         return volume <= 0.0001
     }
 
-    /// Read one input-scope property, on the main element, or nil when the device does
-    /// not implement it. `mElement` is the master control; per-channel volume without a
+    /// Read one property of `device` on the main element, or nil when the device does
+    /// not implement it. The scope defaults to input, which is what mute and volume are
+    /// asked in. `mElement` is the master control; per-channel volume without a
     /// master reads as absent, which lands on "usable" by design.
     ///
     /// The size the driver actually wrote is checked, not assumed: a short write with
@@ -115,11 +137,12 @@ enum Microphone {
     /// `initial` is the value that survives a partial read being rejected — chosen as
     /// the *usable* reading of each property, so every escape hatch here agrees.
     private static func property<T>(
-        _ selector: AudioObjectPropertySelector, of device: AudioDeviceID, initial: T
+        _ selector: AudioObjectPropertySelector, of device: AudioDeviceID,
+        scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeInput, initial: T
     ) -> T? {
         var address = AudioObjectPropertyAddress(
             mSelector: selector,
-            mScope: kAudioObjectPropertyScopeInput,
+            mScope: scope,
             mElement: kAudioObjectPropertyElementMain)
         guard AudioObjectHasProperty(device, &address) else { return nil }
         let expected = UInt32(MemoryLayout<T>.size)
