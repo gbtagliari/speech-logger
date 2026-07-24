@@ -132,6 +132,19 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   and is never discarded: the user spoke, and a silent discard is the one outcome that deletes a
   braindump with no trace.
 
+- **The tap install** — where the microphone is actually attached, and the one call in the app
+  that could **kill the process** (#55). Under the same contention that produces a dead capture,
+  `installTapOnBus` rejects a format it disagrees with by raising an `NSException`, and an
+  `NSException` is not catchable in Swift: `do`/`catch` never sees it, the typed `RecorderError`
+  never gets a chance, and the app terminates mid-gesture with whatever the user was about to say.
+  Closed on two fronts. The format is read off a **verified node** and handed straight to the
+  install, with the wav opened afterwards, so no window exists between the read and the install
+  for the format to go stale in (the same rate check #54 added is what verifies the node). What is
+  left crosses Objective-C through `ObjCExceptionBridge` — the only Objective-C in the project,
+  and the only place allowed to `@try` — so a raise arrives as a `RecorderError`, the item is
+  cleaned up, and the failure degrades like every other prerequisite (ADR-0004) instead of ending
+  the process.
+
 - **Item directory** — storage is plain files, one directory per item (ADR-0003), no database.
   Holds `audio.mp3`, the three text stages, `pass1.txt` (the annotated pivot), and `meta.json`
   (the explicit `state`, `mode`, timestamps, duration, `error`, `schemaVersion`). Every write is

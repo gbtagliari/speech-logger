@@ -398,6 +398,23 @@ private final class Clock: @unchecked Sendable {
         #expect(reported != nil)
     }
 
+    /// The failure the mic can raise used to terminate the process (#55). Now that it is
+    /// an error, the gesture after it has to be an ordinary recording: a failed start
+    /// leaves nothing behind that could wedge the hotkey.
+    @Test("a failed start does not wedge the next recording")
+    func micStartFailureLeavesTheHotkeyWorking() throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        recorder.throwOnStart = true
+        coordinator.start()
+
+        recorder.throwOnStart = false
+        coordinator.start()
+        #expect(coordinator.isRecording)
+        #expect(recorder.startCount == 2)
+        #expect(try store.list().count == 1)
+    }
+
     // MARK: - The microphone check
 
     /// Capturing while knowing nothing will arrive is manufacturing the loss on

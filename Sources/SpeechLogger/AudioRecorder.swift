@@ -1,4 +1,5 @@
 import AVFoundation
+import ObjCExceptionBridge
 import SpeechLoggerCore
 import os
 
@@ -19,6 +20,15 @@ import os
 /// zero frames, with nothing throwing anywhere. Both are addressed here: the format is
 /// confronted with the device before a recording opens against it, and a configuration
 /// change drops the binding so the next recording builds a fresh engine.
+///
+/// **Nothing in `start` may terminate the process** (#55). The same contention makes
+/// `installTapOnBus` reject a format by raising an `NSException`, which Swift cannot
+/// catch: no `do`/`catch` sees it, `onRecorderStartFailed` never fires, and whatever the
+/// user was about to say dies with the process. Two things keep that shut. The format is
+/// read off a verified node and handed to the install with nothing in between, so the
+/// mismatch has no window to open in; and the install itself goes through
+/// `ObjCException`, so what is left surfaces as a `RecorderError` and degrades like every
+/// other prerequisite failure in this app (ADR-0004).
 @MainActor final class AudioRecorder: AudioRecording {
     enum RecorderError: Error {
         case microphoneAccessDenied
@@ -63,40 +73,77 @@ import os
             throw RecorderError.microphoneAccessDenied
         }
 
-        let format = verifiedInputFormat()  // native (e.g. 48 kHz stereo)
-        let input = engine.inputNode
-        sampleRate = format.sampleRate
+        let input = verifiedInputNode()
+        // The window is a fixed span of time, so its size in frames follows the device's
+        // native rate. Read on its own, and allowed to be a hair stale: a window sized
+        // off a rate that has since moved is a rounding error, while a *format* that has
+        // moved is the raise this whole sequence exists to avoid. `max(1, …)` only guards
+        // against a nonsense rate.
+        let windowRate = input.outputFormat(forBus: 0).sampleRate
+        let state = CaptureState(
+            windowFrames: max(1, Int((windowRate * RecordingCapture.windowDuration).rounded())))
 
+        // Read and installed in one step (#55). Nothing stands between these two
+        // statements — not the wav, which is opened below, and not an allocation — so the
+        // node's format has no window to move in, and the install has no stale format to
+        // reject by raising.
+        let format = input.outputFormat(forBus: 0)  // native (e.g. 48 kHz stereo)
+        do {
+            // The tap fires on a realtime audio thread. Mark the block `@Sendable` so it
+            // is non-isolated: without this the compiler infers `@MainActor` isolation
+            // from the enclosing actor and the Swift 6 runtime traps (SIGTRAP) when
+            // AVFoundation invokes it off the main thread. `state` is `Sendable`.
+            try ObjCException.catching {
+                input.installTap(onBus: 0, bufferSize: 4096, format: format) { @Sendable buffer, _ in
+                    state.append(buffer)
+                }
+            }
+        } catch {
+            // A raise leaves no tap behind, so there is nothing to remove here. What it
+            // does leave is an engine whose binding to the hardware disagreed with itself
+            // one statement apart: not to be trusted for the next gesture either, so the
+            // next recording rebuilds rather than raising again.
+            isEngineStale = true
+            throw RecorderError.engineFailed("installing the tap: \(error)")
+        }
+
+        // Only now the wav, opened against the same format the tap was installed with.
+        // Nothing is missed by opening it after: a tap delivers only while the engine
+        // runs, and the engine starts below.
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("speech-logger-\(UUID().uuidString).wav")
-        let file: AVAudioFile
         do {
-            file = try AVAudioFile(forWriting: url, settings: format.settings)
+            state.attach(try AVAudioFile(forWriting: url, settings: format.settings))
         } catch {
-            throw RecorderError.engineFailed("opening wav for writing: \(error)")
+            throw abandonStart(input, wav: url, "opening wav for writing: \(error)")
         }
-        // The window is a fixed span of time, so its size in frames follows the
-        // device's native rate. `max(1, …)` only guards against a nonsense rate.
-        let windowFrames = max(1, Int((format.sampleRate * RecordingCapture.windowDuration).rounded()))
-        let state = CaptureState(file: file, windowFrames: windowFrames)
 
-        // The tap fires on a realtime audio thread. Mark the block `@Sendable` so it
-        // is non-isolated: without this the compiler infers `@MainActor` isolation
-        // from the enclosing actor and the Swift 6 runtime traps (SIGTRAP) when
-        // AVFoundation invokes it off the main thread. `state` is `Sendable`.
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { @Sendable buffer, _ in
-            state.append(buffer)
-        }
         engine.prepare()
         do {
             try engine.start()
         } catch {
-            input.removeTap(onBus: 0)
-            throw RecorderError.engineFailed("starting engine: \(error)")
+            throw abandonStart(input, wav: url, "starting engine: \(error)")
         }
 
         self.state = state
         wavURL = url
+        // Last, and only on the way out: a failed start leaves no rate behind for a
+        // `stop` that never had a recording to stop.
+        sampleRate = format.sampleRate
+    }
+
+    /// Tear down a start that got far enough to leave something behind, and name the
+    /// failure it is being torn down for. The tap and the temp wav are the two things
+    /// `stop` would have owned; nothing else is set until `start` returns, so there is
+    /// nothing else to undo.
+    private func abandonStart(
+        _ input: AVAudioInputNode, wav url: URL, _ detail: String
+    ) -> RecorderError {
+        input.removeTap(onBus: 0)
+        // A wav opened for a recording that never happens is temp litter: the capture
+        // that does happen is the only one the pipeline deletes for us.
+        try? FileManager.default.removeItem(at: url)
+        return .engineFailed(detail)
     }
 
     func stop() -> RecordingCapture {
@@ -125,11 +172,15 @@ import os
 
     // MARK: - The engine's binding to the device (#54)
 
-    /// A format worth opening a recording against: the input node's, confronted with the
-    /// device first, off an engine that is not stale.
+    /// An input node worth opening a recording against: confronted with the device
+    /// first, off an engine that is not stale.
     ///
     /// The single owner of "is this engine's binding to the hardware still good", so
     /// `start` asks one question instead of sequencing two.
+    ///
+    /// The **node**, not its format, and deliberately so (#55): a format is only good for
+    /// the instant it was read, and `installTapOnBus` answers a stale one by raising. The
+    /// caller reads the format off the node it gets back, immediately before installing.
     ///
     /// `outputFormat(forBus: 0)` is what `AVAudioEngine` *resolved*, not what the device
     /// is running. Under contention — another process holding the input, or having just
@@ -142,7 +193,7 @@ import os
     /// the rest of the app is built on: refusing here costs a thought on a microphone
     /// that might have worked, while proceeding costs, at worst, a `failed` item the
     /// user can see — which is precisely what the guard's dead-capture verdict is for.
-    private func verifiedInputFormat() -> AVAudioFormat {
+    private func verifiedInputNode() -> AVAudioInputNode {
         // A configuration change already invalidated the binding: rebuild before asking
         // the node anything, rather than confronting a format we know is stale.
         if isEngineStale { rebuildEngine() }
@@ -151,7 +202,7 @@ import os
         // the same rule the microphone check follows for a property it cannot read.
         guard let deviceRate = Microphone.defaultInputSampleRate,
             !agrees(format, with: deviceRate)
-        else { return format }
+        else { return engine.inputNode }
 
         log.warning(
             """
@@ -168,7 +219,7 @@ import os
                 the item visibly
                 """)
         }
-        return rebuilt
+        return engine.inputNode
     }
 
     /// Whether the engine resolved the input to the rate the device is actually running.
@@ -223,6 +274,9 @@ import os
 /// and the frame count. The tap fires on a real-time thread; `snapshot` is read on
 /// the main actor after the tap is removed.
 ///
+/// It is built without its file and given one by `attach` before the engine starts,
+/// because the tap install must sit immediately after the format read (#55).
+///
 /// Windows are fixed and span buffer boundaries: a window's partial sum carries over
 /// to the next buffer and closes when `windowFrames` frames have gone into it. The
 /// tap's `bufferSize` is a hint AVFoundation is free to ignore, so measuring per
@@ -237,7 +291,6 @@ import os
 /// after `removeTap`, so there is no concurrent writer to race with either.
 private final class CaptureState: @unchecked Sendable {
     private let lock = NSLock()
-    private let file: AVAudioFile
     /// Frames per energy window, at the device's native sample rate.
     private let windowFrames: Int
 
@@ -249,12 +302,15 @@ private final class CaptureState: @unchecked Sendable {
     private var windowSquareCount = 0
     private var windowFilled = 0
 
-    // Shared counters, guarded by `lock`.
+    // Shared state, guarded by `lock`. For `file` the lock guards the *reference* —
+    // handed over by `attach`, read by the tap — and not the writing, which happens
+    // outside it; there is only ever one writer, and it is the tap.
+    /// The wav being written. Absent until `attach`, which runs before the engine does.
+    private var file: AVAudioFile?
     private var frames: AVAudioFrameCount = 0
     private var droppedWrites = 0
 
-    init(file: AVAudioFile, windowFrames: Int) {
-        self.file = file
+    init(windowFrames: Int) {
         self.windowFrames = windowFrames
         // A minute of headroom, so the common recording never reallocates on the
         // audio thread. Past it, doubling makes a growth a rare event, not a
@@ -262,15 +318,35 @@ private final class CaptureState: @unchecked Sendable {
         windowEnergies.reserveCapacity(Int(60 / RecordingCapture.windowDuration))
     }
 
+    /// Hand the state the wav to write into. Separate from `init` because the tap is
+    /// installed before the file is opened (#55): the format must reach `installTap`
+    /// with nothing in between. Called on the main actor between the install and
+    /// `engine.start()`, so the file is in place before the tap can fire even once.
+    func attach(_ file: AVAudioFile) {
+        lock.lock()
+        self.file = file
+        lock.unlock()
+    }
+
+    /// One lock acquisition per buffer on the audio thread, the same as before the file
+    /// became something to read: the file reference and the frame count are taken
+    /// together, and the write itself — the slow part — stays outside. A second
+    /// acquisition happens only when a write is lost, which is not the hot path.
     func append(_ buffer: AVAudioPCMBuffer) {
-        // Cannot throw off the real-time tap; count a failed write so the loss is
-        // reported, not silently swallowed.
-        var didWrite = true
-        do { try file.write(from: buffer) } catch { didWrite = false }
         accumulate(buffer)
         lock.lock()
+        let file = self.file
         frames += buffer.frameLength
-        if !didWrite { droppedWrites += 1 }
+        lock.unlock()
+
+        // Cannot throw off the real-time tap; a lost write is counted so it is reported
+        // rather than silently swallowed. A buffer with no file behind it is the same
+        // loss and counts the same way — it would mean a tap fired before `attach`,
+        // which the start sequence does not allow.
+        let didWrite = if let file { (try? file.write(from: buffer)) != nil } else { false }
+        guard !didWrite else { return }
+        lock.lock()
+        droppedWrites += 1
         lock.unlock()
     }
 
