@@ -125,7 +125,13 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   throughout is the absence of a measurement. The one exception is the **warm-up**: every
   recording opens with 0.5–0.75 s of exact zeros while the device spins up, so a capture shorter
   than that is all zeros and perfectly healthy, and only the no-frames shape is judged at any
-  length. The recorder confronts the input node's format with the
+  length. A **short** dead capture — a device that opens then drops inside that warm-up window,
+  delivering a handful of frames and a short all-zero sequence — is caught by a signal other than
+  duration (#60): the recorder reports whether the engine could **bind** the device — its rate
+  never reconciled at open (the #59 rate mismatch) or the device dropped under the capture
+  mid-gesture (a configuration change while recording) — and an all-zero capture from a device that
+  would not bind is dead at any length. A device that bound normally leaves the signal off, so a
+  genuine fat-fingered tap still discards without litter. The recorder confronts the input node's format with the
   default input device's nominal rate before a recording opens against it, and an
   `AVAudioEngineConfigurationChange` marks the binding stale so the next recording rebuilds. A
   rebuild alone does not clear the fallback, though (#59): a disagreement **forces** the device's

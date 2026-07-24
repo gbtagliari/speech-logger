@@ -33,11 +33,26 @@ public struct RecordingCapture: Sendable, Equatable {
     /// silence, and — when `frames` is non-zero — not the same as receiving nothing
     /// either. See `RecordingGuard.evaluate`.
     public let windowEnergies: [Float]
+    /// Whether the recorder opened this recording against an input node whose rate never
+    /// reconciled with the device — the engine could not bind the device (#59, #60).
+    ///
+    /// A positive tell, available at capture time, that the device was not delivering. It
+    /// is what separates a **short** dead capture (a device that opened then dropped
+    /// inside the warm-up window, delivering a handful of frames and a short all-zero
+    /// sequence) from a fat-fingered double-tap, which look identical by duration and
+    /// energy alone. `RecordingGuard` reads it to fail such a capture instead of
+    /// discarding it (#60); a healthy device that bound normally always leaves it false,
+    /// so a genuine accidental tap still discards without litter.
+    public let deviceBindingFailed: Bool
 
-    public init(wav: URL, duration: TimeInterval, frames: Int, windowEnergies: [Float]) {
+    public init(
+        wav: URL, duration: TimeInterval, frames: Int, windowEnergies: [Float],
+        deviceBindingFailed: Bool = false
+    ) {
         self.wav = wav
         self.duration = duration
         self.frames = frames
         self.windowEnergies = windowEnergies
+        self.deviceBindingFailed = deviceBindingFailed
     }
 }

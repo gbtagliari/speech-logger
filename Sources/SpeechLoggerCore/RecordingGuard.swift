@@ -152,15 +152,26 @@ public struct RecordingGuard: Sendable {
     /// `discardTooShort` whatever its energy — both verdicts discard, and the
     /// distinction is for the reader, not for the outcome.
     ///
-    /// The three measurements arrive loose rather than as the `RecordingCapture` they
-    /// come from, on purpose: the capture also carries the wav's URL, and this seam is
-    /// the one place the whole verdict is decided *without hardware*, replaying window
-    /// sequences recorded from a real microphone as fixtures (#46). A file that has to
-    /// exist for a threshold to be swept would cost more than the four arguments do.
+    /// The measurements arrive loose rather than as the `RecordingCapture` they come
+    /// from, on purpose: the capture also carries the wav's URL, and this seam is the one
+    /// place the whole verdict is decided *without hardware*, replaying window sequences
+    /// recorded from a real microphone as fixtures (#46). A file that has to exist for a
+    /// threshold to be swept would cost more than the loose arguments do.
+    ///
+    /// `deviceBindingFailed` is the #60 discriminator: a positive tell, from the recorder,
+    /// that the engine could not bind the device — its rate never reconciled at open (the
+    /// #59 rate mismatch) or the device dropped under the capture mid-gesture. It is what
+    /// lets a **short** dead capture — a device that opened then dropped inside the warm-up
+    /// window — be told apart from a fat-fingered tap, which duration alone cannot. It
+    /// defaults false so a caller with no such signal, and every replayed fixture, is
+    /// judged exactly as before.
     public func evaluate(
-        mode: ItemMode, duration: TimeInterval, frames: Int, windowEnergies: [Float]
+        mode: ItemMode, duration: TimeInterval, frames: Int, windowEnergies: [Float],
+        deviceBindingFailed: Bool = false
     ) -> GuardDecision {
-        if receivedNothing(frames: frames, windowEnergies: windowEnergies) {
+        if receivedNothing(
+            frames: frames, windowEnergies: windowEnergies,
+            deviceBindingFailed: deviceBindingFailed) {
             return .failEmptyCapture
         }
         guard duration >= minimumDuration(for: mode) else { return .discardTooShort }
@@ -194,9 +205,25 @@ public struct RecordingGuard: Sendable {
     /// An empty sequence with frames received is the third case and is *not* this one:
     /// it means the capture could not read the device's sample format, which says
     /// nothing about the audio — see the note in `evaluate`.
-    private func receivedNothing(frames: Int, windowEnergies: [Float]) -> Bool {
+    ///
+    /// `deviceBindingFailed` opens a fourth shape (#60): a **short** all-zero capture the
+    /// warm-up allowance would otherwise protect. When the recorder reports the engine
+    /// could not bind the device, a run of nothing but exact zeros is a dead capture at
+    /// *any* length — the binding failure supplies the proof the device was not
+    /// delivering that duration cannot. It is required alongside the zeros, not on its
+    /// own: a binding failure over an empty sequence stays a keep (no measurement is not
+    /// a measurement of zero), and a binding failure over a sequence that measured
+    /// anything is judged on its energy like any other.
+    private func receivedNothing(
+        frames: Int, windowEnergies: [Float], deviceBindingFailed: Bool
+    ) -> Bool {
         if frames == 0 { return true }
+        // `allSatisfy` is vacuously true on an empty sequence, so the two zero-run
+        // checks below both qualify it: the binding-failure branch with an explicit
+        // non-empty guard, the warm-up branch with its length guard.
+        let allZero = windowEnergies.allSatisfy { $0 == 0 }
+        if deviceBindingFailed, !windowEnergies.isEmpty, allZero { return true }
         guard windowEnergies.count > warmUpWindowAllowance else { return false }
-        return windowEnergies.allSatisfy { $0 == 0 }
+        return allZero
     }
 }

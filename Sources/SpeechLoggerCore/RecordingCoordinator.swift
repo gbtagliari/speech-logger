@@ -162,7 +162,8 @@ public protocol AudioEncoding: Sendable {
 
         switch guardCheck.evaluate(
             mode: mode, duration: capture.duration, frames: capture.frames,
-            windowEnergies: capture.windowEnergies) {
+            windowEnergies: capture.windowEnergies,
+            deviceBindingFailed: capture.deviceBindingFailed) {
         case .failEmptyCapture:
             // The device gave us nothing while reporting itself usable (#54). The user
             // spoke and there is no audio to encode, so this is the one guard verdict
@@ -173,7 +174,8 @@ public protocol AudioEncoding: Sendable {
             _ = try? store.fail(
                 id, stage: .recording, reason: .emptyOutput,
                 detail: "the microphone delivered no audio: \(capture.frames) frame(s), "
-                    + "\(capture.windowEnergies.count) window(s)",
+                    + "\(capture.windowEnergies.count) window(s)"
+                    + (capture.deviceBindingFailed ? ", device did not bind (#60)" : ""),
                 mode: mode)
             onRecordingFailed?(mode)
         case .discardTooShort, .discardSilent:
