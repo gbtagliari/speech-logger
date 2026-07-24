@@ -16,6 +16,9 @@ private enum StubError: Error { case micDenied, encodeFailed }
     /// 48 kHz, so an ordinary capture is a live one and only a test that means to
     /// simulate a dead device (#54) sets it to zero.
     var captureFrames: Int?
+    /// Whether the engine could not bind the device (#60). Default false: an ordinary
+    /// capture bound normally, and only a test simulating a short dead capture sets it.
+    var captureBindingFailed = false
     private(set) var startCount = 0
     private(set) var stopCount = 0
     private(set) var lastWav: URL?
@@ -38,7 +41,7 @@ private enum StubError: Error { case micDenied, encodeFailed }
         return RecordingCapture(
             wav: wav, duration: captureDuration,
             frames: captureFrames ?? Int(captureDuration * 48000),
-            windowEnergies: captureEnergies)
+            windowEnergies: captureEnergies, deviceBindingFailed: captureBindingFailed)
     }
 }
 
@@ -297,6 +300,45 @@ private final class Clock: @unchecked Sendable {
         #expect(items.count == 1)
         #expect(items[0].state == .failed)
         #expect(items[0].meta.error?.reason == .emptyOutput)
+    }
+
+    @Test("a short dead capture from a device that would not bind lands failed (#60)", arguments: ItemMode.allCases)
+    func shortDeadCaptureFails(mode: ItemMode) async throws {
+        defer { cleanup() }
+        // The gap #54 left and #60 closes: a device that opened then dropped inside the
+        // warm-up window delivers a handful of frames and a short all-zero sequence,
+        // which reads as an accidental tap by length and energy alone. The recorder's
+        // binding-failure signal is what promotes it to a visible failure.
+        let coordinator = makeCoordinator()
+        recorder.captureDuration = 0.36
+        recorder.captureFrames = Int(0.36 * 48000)
+        recorder.captureEnergies = Array(repeating: 0, count: 18)
+        recorder.captureBindingFailed = true
+        coordinator.start()
+        await coordinator.stop(mode: mode)
+
+        let items = try store.list()
+        #expect(items.count == 1)
+        #expect(items[0].state == .failed)
+        #expect(items[0].meta.error?.stage == .recording)
+        #expect(items[0].meta.error?.reason == .emptyOutput)
+        #expect(items[0].meta.mode == mode)
+    }
+
+    @Test("the same short all-zero capture discards when the device bound normally (#60)")
+    func shortTapWithoutBindingFailureDiscards() async throws {
+        defer { cleanup() }
+        // The acceptance criterion the fix must not break: without the binding signal a
+        // genuine sub-floor tap is still an accidental tap, and leaves no item.
+        let coordinator = makeCoordinator()
+        recorder.captureDuration = 0.36
+        recorder.captureFrames = Int(0.36 * 48000)
+        recorder.captureEnergies = Array(repeating: 0, count: 18)
+        recorder.captureBindingFailed = false
+        coordinator.start()
+        await coordinator.stop(mode: .braindump)
+
+        #expect(try store.list().isEmpty)
     }
 
     @Test("a dead capture never hands off to the transcription lane")

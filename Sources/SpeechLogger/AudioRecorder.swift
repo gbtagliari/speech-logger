@@ -68,6 +68,20 @@ import os
     private var state: CaptureState?
     private var wavURL: URL?
     private var sampleRate: Double = 0
+    /// Whether the engine could not bind the device for the capture in flight (#60). Two
+    /// shapes feed it, both of which criterion 1 of #60 names: `verifiedInputNode` sets it
+    /// when the input node's rate never reconciled with the device at open (the #59 rate
+    /// mismatch), and `markEngineStale` sets it when the audio graph changes *under* an
+    /// active capture (a device dropping mid-gesture — the ticket's own repro). Carried
+    /// onto the capture as its `deviceBindingFailed` so the guard fails a *short* dead
+    /// capture the warm-up allowance would otherwise discard as an accidental tap. Reset
+    /// per recording — it describes this capture's binding, nothing older.
+    private var deviceBindingFailed = false
+    /// Whether a capture is in flight, so a mid-recording configuration change can be told
+    /// from one that arrives between recordings. Set once the engine is running and
+    /// cleared before it is torn down, so the deliberate stop below is never misread as a
+    /// device dropping under the capture (#60).
+    private var isCapturing = false
 
     /// The device seam is injected so the reconciliation flow is testable without
     /// hardware; production takes the CoreAudio conformer. The tolerance is shared with
@@ -145,6 +159,9 @@ import os
 
         self.state = state
         wavURL = url
+        // The engine is running: a configuration change from here on is a device moving
+        // under a live capture, not one arriving between recordings (#60).
+        isCapturing = true
         // Last, and only on the way out: a failed start leaves no rate behind for a
         // `stop` that never had a recording to stop.
         sampleRate = format.sampleRate
@@ -165,6 +182,9 @@ import os
     }
 
     func stop() -> RecordingCapture {
+        // Before the teardown: `engine.stop()` can itself post a configuration change,
+        // and this is a deliberate stop, not a device dropping under the capture (#60).
+        isCapturing = false
         engine.inputNode.removeTap(onBus: 0)  // no more writes after this
         engine.stop()
 
@@ -177,15 +197,17 @@ import os
         let duration = sampleRate > 0 ? Double(snapshot.frames) / sampleRate : 0
         let url = wavURL ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("speech-logger-empty.wav")
+        let bindingFailed = deviceBindingFailed
 
         state = nil  // flushes and closes the AVAudioFile
         wavURL = nil
         sampleRate = 0
+        deviceBindingFailed = false
 
         energyDump.write(snapshot.windowEnergies)
         return RecordingCapture(
             wav: url, duration: duration, frames: Int(snapshot.frames),
-            windowEnergies: snapshot.windowEnergies)
+            windowEnergies: snapshot.windowEnergies, deviceBindingFailed: bindingFailed)
     }
 
     // MARK: - The engine's binding to the device (#54)
@@ -219,6 +241,9 @@ import os
     /// that might have worked, while proceeding costs, at worst, a `failed` item the
     /// user can see — which is precisely what the guard's dead-capture verdict is for.
     private func verifiedInputNode() -> AVAudioInputNode {
+        // Fresh per recording: this capture's binding is judged on this recording's
+        // reconciliation, not a prior one's (#60).
+        deviceBindingFailed = false
         // A configuration change already invalidated the binding: rebuild before asking
         // the node anything, rather than confronting a format we know is stale.
         if isEngineStale { rebuildEngine() }
@@ -256,7 +281,10 @@ import os
         if abs(rebuilt - deviceRate) > Self.sampleRateTolerance {
             // The device never re-published a rate the engine picked up. Record anyway:
             // the guard's dead-capture verdict fails the item where the user can see it,
-            // which is the last resort #54 exists to be.
+            // which is the last resort #54 exists to be. Remember it: a capture that then
+            // reads nothing but zeros is dead at any length, and this is the tell that
+            // separates a short dead capture from an accidental tap (#60).
+            deviceBindingFailed = true
             log.error(
                 """
                 input node still at \(rebuilt, privacy: .public) Hz after reconciling \
@@ -312,6 +340,11 @@ import os
     /// would throw away the capture in flight; marking it stale defers the rebuild to the
     /// next `start`, which is the only moment a fresh engine is worth anything.
     ///
+    /// A change that arrives while a capture *is* in flight is also the device dropping
+    /// under that capture — the ticket's own repro, a headset disconnecting mid-gesture
+    /// (#60). It is recorded as a binding failure on this capture, so a short all-zero
+    /// recording that follows fails visibly rather than discarding as an accidental tap.
+    ///
     /// The previous subscription is removed here and nowhere else: there is no `deinit`,
     /// because a `@MainActor` class cannot touch a non-`Sendable` token from a nonisolated
     /// one. Bounded on purpose — one recorder lives for the whole process, exactly one
@@ -332,6 +365,14 @@ import os
 
     private func markEngineStale() {
         isEngineStale = true
+        if isCapturing {
+            // The graph changed under a live capture: the device dropped mid-gesture, so
+            // what the tap reads from here on is not to be trusted (#60). Fail this
+            // capture's binding — a short all-zero recording is then dead, not an
+            // accidental tap. A change between recordings leaves this alone; `start`
+            // resolves a fresh binding for the next capture.
+            deviceBindingFailed = true
+        }
         log.notice("audio configuration changed; the engine will be rebuilt on the next recording")
     }
 }

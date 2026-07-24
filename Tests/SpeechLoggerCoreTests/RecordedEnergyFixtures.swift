@@ -107,4 +107,17 @@ enum RecordedEnergy {
     /// 0.0015 on the internal microphone, 0.007 on a Bluetooth headset. Zero throughout
     /// is the absence of a measurement, not a quiet room.
     static let deadCapture = [Float](repeating: 0, count: 250)
+
+    /// A **short** dead capture: a device that opened, delivered a handful of warm-up
+    /// windows and then dropped, all of them exactly zero (#60). 18 windows, ~0.36 s —
+    /// shorter than the warm-up allowance, so by length and energy alone it is
+    /// indistinguishable from a fat-fingered double-tap. It is a dead capture only
+    /// because the engine could not bind the device — the device dropping under the
+    /// capture mid-gesture — which the guard is told separately.
+    ///
+    /// The measured signature written out rather than a dumped file: observed
+    /// 2026-07-24 after a Bluetooth headset disconnect mid-gesture — the menubar counter
+    /// appeared, the macOS mic indicator flashed on then off, and the recording left no
+    /// item on disk because the short all-zero window sequence read as an accidental tap.
+    static let shortDeadCapture = [Float](repeating: 0, count: 18)
 }

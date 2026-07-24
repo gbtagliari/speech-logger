@@ -153,6 +153,60 @@ struct RecordingGuardTests {
         #expect(guardCheck.evaluate(mode: .braindump, duration: 8.0, frames: frames(8.0), windowEnergies: sequence) == .discardSilent)
     }
 
+    // MARK: - The short dead capture (#60)
+
+    @Test("a short all-zero capture from a device that would not bind fails, in either mode", arguments: ItemMode.allCases)
+    func shortDeadCaptureFails(mode: ItemMode) {
+        // The gap #54 left: a device that opens then drops inside the warm-up window
+        // delivers a handful of frames and a short all-zero sequence, so it is a warm-up
+        // by length and a fat-fingered tap by every other measure. The one thing that
+        // tells it apart is that the engine could not bind the device — the #59 rate
+        // mismatch, a positive tell the device was not delivering. Given that, a short
+        // all-zero capture is dead, whatever its length.
+        let dead = digitalZero(windows: 18)  // 0.36 s: inside every warm-up run measured
+        #expect(guardCheck.evaluate(mode: mode, duration: 0.36, frames: frames(0.36), windowEnergies: dead, deviceBindingFailed: true) == .failEmptyCapture)
+    }
+
+    @Test("a short all-zero tap on a device that bound normally still discards, no litter")
+    func shortTapWithoutBindingFailureDiscards() {
+        // The acceptance criterion the fix must not break: a genuine sub-floor accidental
+        // tap has no binding failure, so the warm-up allowance still protects it and it
+        // discards silently the way it always did. Only the binding signal promotes a
+        // short all-zero capture to a failure.
+        let tap = digitalZero(windows: 18)
+        #expect(guardCheck.evaluate(mode: .braindump, duration: 0.36, frames: frames(0.36), windowEnergies: tap, deviceBindingFailed: false) == .discardTooShort)
+        #expect(guardCheck.evaluate(mode: .dictation, duration: 0.36, frames: frames(0.36), windowEnergies: tap, deviceBindingFailed: false) == .discardSilent)
+    }
+
+    @Test("the binding signal never overrides a capture that measured something")
+    func bindingFailureDoesNotFailARecordingThatMeasured() {
+        // The signal only bites in combination with all-zero windows. A device that
+        // recovered — bound badly but then delivered real speech — is judged on its
+        // energy like any other, and accepted. The failure is "received nothing", not
+        // "bound badly": one loud window is proof the device delivered.
+        let utterance = speech(loud: 12, in: 20)
+        #expect(guardCheck.evaluate(mode: .dictation, duration: 0.4, frames: frames(0.4), windowEnergies: utterance, deviceBindingFailed: true) == .accept)
+    }
+
+    @Test("the binding signal does not fail an empty window sequence")
+    func bindingFailureDoesNotFailEmptyWindows() {
+        // Frames arrived, no window closed: the capture could not read the device's
+        // sample format at all, which says nothing about whether the audio holds speech
+        // — the audio may be fine. That stays a keep even under a binding failure; the
+        // signal fails a capture that measured *zeros*, not one that measured nothing.
+        #expect(guardCheck.evaluate(mode: .braindump, duration: 5.0, frames: frames(5.0), windowEnergies: [], deviceBindingFailed: true) == .accept)
+    }
+
+    @Test("a replayed short dead capture fails only with the binding signal", arguments: ItemMode.allCases)
+    func replaysShortDeadCapture(mode: ItemMode) {
+        // The measured signature of the 2026-07-24 headset drop: short, all zero, a
+        // handful of frames. It discards as an accidental tap on its own — the litter #46
+        // guards against — and fails only once the guard is told the device would not bind.
+        let dead = RecordedEnergy.shortDeadCapture
+        #expect(guardCheck.evaluate(mode: mode, duration: 0.36, frames: frames(0.36), windowEnergies: dead, deviceBindingFailed: false) != .failEmptyCapture)
+        #expect(guardCheck.evaluate(mode: mode, duration: 0.36, frames: frames(0.36), windowEnergies: dead, deviceBindingFailed: true) == .failEmptyCapture)
+    }
+
     // MARK: - The five scenarios (#46)
 
     @Test("a silent room is discarded, not failed")
