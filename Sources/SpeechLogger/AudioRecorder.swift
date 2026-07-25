@@ -30,7 +30,7 @@ import os
 /// reasons for immediacy and for the bound are written down, and which replays without a
 /// Bluetooth headset.
 ///
-/// Three consequences run through everything below:
+/// Four consequences run through everything below:
 ///
 /// - **Nothing is derived from a format the engine merely resolved.** The wav's format,
 ///   the energy window's size and the sample rate the duration divides by all come from
@@ -46,6 +46,10 @@ import os
 /// - **Opening the mic is not recording.** `start` returning says a capture is open, not
 ///   that audio exists; `onAudioFlowing` is the second event, 1.0–1.6 s later on a
 ///   headset, and it is what the menubar's glyph and clock follow (#63).
+/// - **Disposable means disposed, at `stop` as much as at a restart.** An `AVAudioEngine`
+///   holds the input device for as long as the object lives; stopping it does not let go.
+///   An engine parked between captures keeps the headset's HFP/SCO link up, so the user's
+///   music stays at 16 kHz mono until the app quits. Between captures there is no engine.
 ///
 /// **Nothing in `start` may terminate the process** (#55). The same contention makes
 /// `installTapOnBus` reject a format by raising an `NSException`, which Swift cannot
@@ -75,7 +79,13 @@ import os
     /// Rebuilt on every restart, and fresh for every capture. Never reused across
     /// gestures: a capture that needed rebuilding says nothing good about the engine it
     /// ended on, and building one costs less than a millisecond.
-    private var engine = AVAudioEngine()
+    ///
+    /// **Optional because between captures there must be no engine at all.** An
+    /// `AVAudioEngine` whose input node has been touched holds the input device open for
+    /// as long as the object lives, and `stop()` does not change that. On a Bluetooth
+    /// headset that claim is what keeps the HFP/SCO link up, so the headset stays at
+    /// 16 kHz mono until the app quits. Nil here is the device released.
+    private var engine: AVAudioEngine?
     /// Off unless `SPEECH_LOGGER_ENERGY_DUMP` is set; see `EnergyDump`.
     private let energyDump = EnergyDump()
     private var state: CaptureState?
@@ -214,7 +224,8 @@ import os
     /// on the device this ticket is about that number is a fiction.
     private func openEngine() {
         guard let state else { return }
-        engine = AVAudioEngine()
+        let engine = AVAudioEngine()
+        self.engine = engine
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         do {
@@ -243,11 +254,22 @@ import os
         }
     }
 
-    /// Drop the tap and the engine. Safe on an engine that never started and on one that
-    /// was never tapped.
+    /// Drop the tap and the engine, and **release the device with it**. Safe on an engine
+    /// that never started, on one that was never tapped, and on no engine at all.
+    ///
+    /// The release is the point, not the stop. `engine.stop()` halts IO but leaves the
+    /// input node's device claim standing for as long as the object lives, and a headset
+    /// the app is still claiming does not go back to A2DP: it stays on the HFP/SCO link,
+    /// 16 kHz mono, for every other app on the machine. Dropping the last reference is
+    /// what closes it.
+    ///
+    /// This is also the teardown half of a restart, where the release costs nothing: the
+    /// rebuild is the next statement, with no pause for the Bluetooth stack to act on.
     private func teardownEngine() {
+        guard let engine else { return }
         engine.inputNode.removeTap(onBus: 0)  // no more writes after this
         engine.stop()
+        self.engine = nil
     }
 
     // MARK: - The watchdog
@@ -294,8 +316,11 @@ import os
             }
         }
 
+        // No engine reads as not running, which is the condition the watchdog rebuilds on.
+        // Inside a capture that state is momentary — the teardown and the rebuild are
+        // consecutive statements on this actor, so no tick can land between them.
         switch watchdog.verdict(
-            engineIsRunning: engine.isRunning, hasReceivedAudio: progress.hasReceivedAudio,
+            engineIsRunning: engine?.isRunning ?? false, hasReceivedAudio: progress.hasReceivedAudio,
             sinceLastFrame: now - progress.lastProgressAt, restarts: progress.restarts) {
         case .keepRecording:
             break
@@ -331,7 +356,7 @@ import os
         log.warning(
             """
             rebuilding the audio engine (restart \(self.progress.restarts, privacy: .public)): \
-            running \(self.engine.isRunning, privacy: .public), audio \
+            running \(self.engine?.isRunning ?? false, privacy: .public), audio \
             \(self.progress.hasReceivedAudio, privacy: .public)
             """)
         teardownEngine()

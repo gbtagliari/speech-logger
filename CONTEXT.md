@@ -160,6 +160,15 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
     was not delivering: the [dead capture](#dead-capture) verdict and the failure reason both read
     it.
 
+- **Releasing the device** — the recorder holding no `AVAudioEngine` at all between captures, so
+  the input device is claimed only while a recording is in flight. An engine holds the device for
+  as long as the object lives, and stopping it does not let go; an engine parked after `stop` is a
+  standing claim. The cost lands **outside the app**: a Bluetooth headset the machine is still
+  claiming stays on the HFP/SCO link, which is 16 kHz mono, so every recording used to leave the
+  user's music degraded until the app quit. The release is deliberate at `stop` and free at an
+  [engine restart](#engine-restart), where the rebuild is the next statement and the stack gets no
+  pause to act on.
+
 - **Audio flowing** — the first frame of a capture actually arriving, which is **not** the gesture
   and not `start` returning (#63). On a Bluetooth headset the two are 1.0–1.6 s apart, and on a
   device that never binds the second one never happens. Everything the user can see follows the
