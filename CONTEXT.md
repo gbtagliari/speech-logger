@@ -236,15 +236,23 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   sequence**. The verdict is *the fraction of windows above a floor*: a running peak would let one
   key click carry an empty recording into transcription, and a global average would dilute as a
   recording grew, sending a long braindump full of thinking pauses toward the silence verdict
-  precisely as it got longer. A fraction is duration-invariant. Both thresholds — what counts as a
-  loud window, and what fraction is enough — live at the **one seam** in `RecordingGuard`, which is
-  what makes offline calibration against recorded fixtures possible, and both err toward accepting:
-  a false "has speech" costs one hallucinated item you delete, a false "silent" deletes real speech
-  invisibly. The guard judges the **dead capture** before either the duration floor or the energy
-  test, since a capture that received nothing measures 0.00 s and any other ordering reports it as
-  an accidental tap. **Accepted residual:** the test passes and Whisper hallucinates rather than
-  returning empty, so the post-transcription `empty_output` net does not fire and the item carries
-  invented text. That is the tolerated direction of error, chosen over silent deletion.
+  precisely as it got longer. A fraction is duration-invariant. The **floor is derived from the
+  recording itself** — eight times its own noise floor (the 20th percentile of the windows that
+  measured something), capped at 0.02 (#67). An absolute floor is not a property of the audio:
+  input gain scales every window, so the same voice that peaks at 0.26 on one setup peaks at 0.019
+  on the internal microphone at 23/100, and a fixed 0.02 deleted that braindump as silence. The cap
+  is what a recording with no quiet windows in it is judged by, since its own quiet level *is*
+  speech. Both thresholds — what counts as a loud window, and what fraction is enough — live at the
+  **one seam** in `RecordingGuard`, which is what makes offline calibration against recorded
+  fixtures possible, and both err toward accepting: a false "has speech" costs one hallucinated item
+  you delete, a false "silent" deletes real speech invisibly. The guard judges the **dead capture**
+  before either the duration floor or the energy test, since a capture that received nothing
+  measures 0.00 s and any other ordering reports it as an accidental tap. A discard leaves no item,
+  but it does leave a **log line carrying what it measured** (duration, windows, peak, derived
+  floor, loud fraction) — invisible to the user, not to whoever has to explain it. **Accepted
+  residual:** the test passes and Whisper hallucinates rather than returning empty, so the
+  post-transcription `empty_output` net does not fire and the item carries invented text. That is
+  the tolerated direction of error, chosen over silent deletion.
 
 - **Passthrough** — the app **cannot swallow** the gesture; the key also reaches the frontmost app.
   Benign — verified for a tap (ADR-0004) and for a multi-second hold on 3 targets (#35): no character,

@@ -46,6 +46,12 @@ public enum GuardDecision: Sendable, Equatable {
 /// braindump full of thinking pauses would drift toward the silence verdict
 /// precisely as it got longer. A fraction is duration-invariant.
 ///
+/// The floor that fraction is measured against is **derived from the recording itself**
+/// — a multiple of its own noise floor, capped (#67). An absolute number cannot serve,
+/// because it is not a property of the audio: input gain scales every window, and the
+/// same voice that peaks at 0.26 on one device peaks at 0.019 on the internal microphone
+/// at 23/100. A fixed floor of 0.02 read that recording as silence and deleted it.
+///
 /// The whole verdict lives here rather than in the capture, which carries only the
 /// raw window sequence: what counts as a loud window and what fraction is enough are
 /// both decided at this one seam, which is what makes offline calibration against
@@ -69,14 +75,46 @@ public struct RecordingGuard: Sendable {
     /// still dies here, while the shortest utterance anyone dictates on purpose lives.
     /// The speech test is the second net either way.
     public let dictationMinimumDuration: TimeInterval
-    /// RMS amplitude (0…1) at or above which one ~20 ms window counts as loud.
+    /// How far over the recording's own noise floor one ~20 ms window has to sit to count
+    /// as loud. **The loud floor is derived per recording, never fixed** (#67).
     ///
-    /// Measured, not assumed (`RecordedEnergy`): in a silent room the loudest window
-    /// of a right-Option double-tap — the gesture's own key click — is 0.005, since
-    /// RMS over 20 ms spreads a ~1 ms transient thin. Speech at normal speaking
-    /// distance runs to 0.26. The default sits 4x over the click and an order of
-    /// magnitude under speech.
-    public let loudWindowFloor: Float
+    /// An absolute floor cannot hold, because the number it compares against is not a
+    /// property of the audio: input gain scales every window by a factor set by the device
+    /// and the macOS input slider, neither of which the guard can see. The same voice at
+    /// the same distance measured 0.26 at its peak on one setup and 0.019 at 23/100 on the
+    /// internal microphone, so a floor of 0.02 read a whole braindump as silence and
+    /// deleted it. What survives the gain change is the *ratio* between speech and the room
+    /// under it.
+    ///
+    /// Measured across every fixture in `RecordedEnergy`: at 8x the recording's own quiet
+    /// level, real speech puts 27% to 51% of its windows over the floor while a silent
+    /// double-tap puts 0.6% — its lone key click, which is genuinely 9x its room and is
+    /// discarded by the fraction, not by the floor. The multiple cannot go much lower: at
+    /// 2x the same double-tap reaches 5.4% and would be accepted.
+    public let noiseFloorMultiple: Float
+    /// The highest the derived floor may ever go, in RMS amplitude (0…1).
+    ///
+    /// The one thing a relative floor cannot measure is a recording with no quiet windows
+    /// in it: its own 20th percentile *is* speech, and a multiple of that is above
+    /// everything in the file, so the recording would read as silence for being too loud.
+    /// The cap stops the derivation there.
+    ///
+    /// Its value is the absolute floor that shipped before, measured against the same
+    /// fixtures: 0.005 for the loudest key click in a silent room, 0.26 for speech at
+    /// normal speaking distance and a normal gain. Keeping it as the ceiling makes the new
+    /// rule strictly more permissive than the old one — the derived floor is never above
+    /// it — which is the direction the guard's error costs point (a false "has speech"
+    /// costs one item you delete; a false "silent" deletes speech invisibly).
+    public let loudWindowFloorCap: Float
+    /// Which window in the sorted sequence stands for "the room": the 20th percentile of
+    /// the windows that measured *something*.
+    ///
+    /// Not the minimum, which is one sample of a noisy quantity, and not the median, which
+    /// a dense recording pushes up into speech. Zeros are excluded because they are the
+    /// absence of a measurement (see `receivedNothing`): a recording opens with a run of
+    /// them while the device warms up, and counting them would drag the percentile to zero
+    /// and the derived floor with it.
+    public let quietWindowPercentile: Double
     /// The fraction of windows that must be loud for the recording to count as
     /// speech. Low enough that sparse speech across long pauses still passes, high
     /// enough that a lone transient does not.
@@ -114,7 +152,9 @@ public struct RecordingGuard: Sendable {
     public init(
         braindumpMinimumDuration: TimeInterval = 1.0,
         dictationMinimumDuration: TimeInterval = 0.35,
-        loudWindowFloor: Float = 0.02,
+        noiseFloorMultiple: Float = 8,
+        loudWindowFloorCap: Float = 0.02,
+        quietWindowPercentile: Double = 0.20,
         minimumLoudFraction: Double = 0.05,
         // Derived rather than written as 50, so "one second" is the code and not a
         // comment that a later tuning of the window size could quietly falsify.
@@ -122,7 +162,9 @@ public struct RecordingGuard: Sendable {
     ) {
         self.braindumpMinimumDuration = braindumpMinimumDuration
         self.dictationMinimumDuration = dictationMinimumDuration
-        self.loudWindowFloor = loudWindowFloor
+        self.noiseFloorMultiple = noiseFloorMultiple
+        self.loudWindowFloorCap = loudWindowFloorCap
+        self.quietWindowPercentile = quietWindowPercentile
         self.minimumLoudFraction = minimumLoudFraction
         self.warmUpWindowAllowance = warmUpWindowAllowance
     }
@@ -185,12 +227,60 @@ public struct RecordingGuard: Sendable {
         // perfectly good. Keeping it costs a hallucinated item at worst; discarding
         // it would delete a whole braindump on the strength of a broken measurement,
         // which is the one error this guard must not make.
-        guard !windowEnergies.isEmpty else { return .accept }
+        guard let measurement = measure(windowEnergies) else { return .accept }
+        return measurement.loudFraction >= minimumLoudFraction ? .accept : .discardSilent
+    }
+
+    /// The speech test's two numbers for one recording: the floor it earned, and how much
+    /// of it cleared that floor.
+    ///
+    /// One value rather than two calls, because the fraction is meaningless without the
+    /// floor it was counted against, and deriving them separately would sort the window
+    /// sequence twice.
+    public struct SpeechMeasurement: Sendable, Equatable {
+        /// The RMS a window in *this* recording had to reach to count as loud.
+        public let loudWindowFloor: Float
+        /// The share of windows that reached it. Against `minimumLoudFraction`, this is
+        /// the whole speech verdict.
+        public let loudFraction: Double
+    }
+
+    /// Measure a recording's speech content, or nil when there are no windows to measure
+    /// — which is not a measurement of silence (see the note in `evaluate`).
+    ///
+    /// Public because the caller logs it: a discard leaves no item, so without these two
+    /// numbers a recording deleted by a wrong threshold leaves nothing to diagnose (#67).
+    ///
+    /// The floor is `noiseFloorMultiple` times the recording's own quiet level, never
+    /// above `loudWindowFloorCap`. With nothing positive in the sequence there is no quiet
+    /// level to derive from — a multiple of zero is zero, which would count every window
+    /// loud — so the cap stands on its own. That case is a dead capture or a warm-up run,
+    /// both already judged before this.
+    public func measure(_ windowEnergies: [Float]) -> SpeechMeasurement? {
+        guard !windowEnergies.isEmpty else { return nil }
+        let loudWindowFloor =
+            quietLevel(in: windowEnergies)
+            .map { min($0 * noiseFloorMultiple, loudWindowFloorCap) } ?? loudWindowFloorCap
         let loud = windowEnergies.reduce(into: 0) { count, energy in
             if energy >= loudWindowFloor { count += 1 }
         }
-        let fraction = Double(loud) / Double(windowEnergies.count)
-        return fraction >= minimumLoudFraction ? .accept : .discardSilent
+        return SpeechMeasurement(
+            loudWindowFloor: loudWindowFloor,
+            loudFraction: Double(loud) / Double(windowEnergies.count))
+    }
+
+    /// The recording's own noise floor: the `quietWindowPercentile` of the windows that
+    /// measured something, or nil when none did.
+    ///
+    /// Sorting is O(n log n) over the window sequence — 15000 windows for a five-minute
+    /// braindump — and runs once, off the audio thread, after the recording is over.
+    private func quietLevel(in windowEnergies: [Float]) -> Float? {
+        let measured = windowEnergies.filter { $0 > 0 }.sorted()
+        guard !measured.isEmpty else { return nil }
+        // Floor of the fractional index, clamped to the last element so a percentile of
+        // 1.0 lands on the maximum rather than one past it.
+        let index = min(Int(Double(measured.count) * quietWindowPercentile), measured.count - 1)
+        return measured[index]
     }
 
     /// Whether the capture received nothing at all: no frame arrived, or frames arrived
