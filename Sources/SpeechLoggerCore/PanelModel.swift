@@ -241,6 +241,9 @@ public struct PanelModel: Equatable, Sendable {
         case .missingBinary: return "dependência ausente"
         case .interrupted: return "interrompido"
         case .timeout: return "tempo esgotado"
+        // Names the device as the culprit, where "saída vazia" names nothing. Which
+        // device it was lives in the error's detail, one Finder click away.
+        case .deviceUnavailable: return "microfone não entregou áudio"
         case nil: return "erro desconhecido"
         }
     }

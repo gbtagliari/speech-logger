@@ -43,7 +43,8 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   produce items; `meta.json` carries **`mode`** ∈ `braindump | dictation` (absent = `braindump`).
 
 - **Item states** — the canonical set.
-  - `recording` — mic is live, no content yet (a running clock).
+  - `recording` — the mic is open, no content yet. The clock next to it starts when audio
+    actually arrives, not when the gesture did (see **audio flowing**).
   - `queued` — recording finished, waiting for the serial transcription lane.
   - `transcribing` — `mlx_whisper` is running.
   - `transcribed` — **terminal, happy path, `mode: dictation` only.** The transcript is the output;
@@ -54,13 +55,17 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   - `failed` — **terminal, broke.** Carries `error: { stage, reason, detail, at }`.
   - `cancelled` — **terminal, you stopped it.** No error; carries `stoppedAt: { stage, at }`.
   - **`stage`** ∈ `recording | transcription | pass1 | pass2`.
-  - **`reason`** ∈ `empty_output | cli_error | missing_binary | interrupted | timeout`
-    (`timeout` is reserved; nothing ships that produces it in the MVP). There is no `no_speech`:
-    a recording with no speech in it is **discarded**, not failed (#46). `empty_output` keeps its
-    name rather than absorbing that meaning, because corrupt audio produces the identical
-    signal — an empty transcript — and "no speech" would assert a cause never observed. It is
-    also what a **dead capture** fails with, at stage `recording` (#54), for the same reason: an
-    absent capture and a corrupt one are the same signal.
+  - **`reason`** ∈ `empty_output | cli_error | missing_binary | interrupted | timeout |
+    device_unavailable` (`timeout` is reserved; nothing ships that produces it in the MVP). There
+    is no `no_speech`: a recording with no speech in it is **discarded**, not failed (#46).
+    `empty_output` keeps its name rather than absorbing that meaning, because corrupt audio
+    produces the identical signal — an empty transcript — and "no speech" would assert a cause
+    never observed. It is also what a **dead capture** fails with, at stage `recording` (#54), for
+    the same reason: an absent capture and a corrupt one are the same signal.
+    `device_unavailable` is the one recording-stage failure that *does* assert a cause, because one
+    was observed: the recorder rebuilt its engine to make the device deliver
+    ([engine restart](#engine-restart)) and it still received nothing (#63). Stage `recording`
+    only, and its detail names the device, which is the piece the user can act on.
 
 - **The two passes** — how organization works, and the reason this tool exists (ADR-0001).
   **Braindump only**; dictation has no LLM in its path.
@@ -116,42 +121,65 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   gained but **receiving nothing** is not knowable as a device fact, so it is caught at the
   capture instead, as a **dead capture** (#54) — not tolerated, just detected elsewhere.
 
-- **Dead capture** — a capture that received nothing: no frame arrived, or every energy window
+- <a id="dead-capture"></a>**Dead capture** — a capture that received nothing: no frame arrived, or every energy window
   read *exactly* zero over a recording long enough for that to mean something. **A failure, not a
-  silence** (#54). It happens under microphone contention, where `AVAudioEngine` binds its input
-  node to a 44.1 kHz fallback while the device runs at another rate and then delivers nothing,
-  with no call throwing anywhere. Digital zero is not a quiet room: a live microphone always
-  measures a noise floor (0.0015 internal, 0.007 on a Bluetooth headset), so exact zero
-  throughout is the absence of a measurement. The one exception is the **warm-up**: every
-  recording opens with 0.5–0.75 s of exact zeros while the device spins up, so a capture shorter
-  than that is all zeros and perfectly healthy, and only the no-frames shape is judged at any
-  length. A **short** dead capture — a device that opens then drops inside that warm-up window,
-  delivering a handful of frames and a short all-zero sequence — is caught by a signal other than
-  duration (#60): the recorder reports whether the engine could **bind** the device — its rate
-  never reconciled at open (the #59 rate mismatch) or the device dropped under the capture
-  mid-gesture (a configuration change while recording) — and an all-zero capture from a device that
-  would not bind is dead at any length. A device that bound normally leaves the signal off, so a
-  genuine fat-fingered tap still discards without litter. The recorder confronts the input node's format with the
-  default input device's nominal rate before a recording opens against it, and an
-  `AVAudioEngineConfigurationChange` marks the binding stale so the next recording rebuilds. A
-  rebuild alone does not clear the fallback, though (#59): a disagreement **forces** the device's
-  nominal rate so it re-publishes its format, and re-points the input AUHAL at the live device.
-  When it delivers nothing even after that the item **fails** (`stage: recording`, `reason: empty_output`)
-  and is never discarded: the user spoke, and a silent discard is the one outcome that deletes a
-  braindump with no trace.
+  silence** (#54). Digital zero is not a quiet room: a live microphone always measures a noise
+  floor (0.0015 internal, 0.007 on a Bluetooth headset), so exact zero throughout is the absence
+  of a measurement. The one exception is the **warm-up**: every recording opens with 0.5–0.75 s of
+  exact zeros while the device spins up, so a capture shorter than that is all zeros and perfectly
+  healthy, and only the no-frames shape is judged at any length. A **short** dead capture — a
+  device that opens then drops inside that warm-up window, delivering a handful of frames and a
+  short all-zero sequence — is told from a fat-fingered tap by a signal other than duration
+  (#60): whether the engine could **bind** the device, which is now read off the
+  [engine restarts](#engine-restart) the capture cost. Zero restarts and an all-zero short capture
+  is an accidental tap and discards without litter; any restart behind it and the capture is dead
+  at any length. A dead capture **fails** (`stage: recording`) and is never discarded: the user
+  spoke, and a silent discard is the one outcome that deletes a braindump with no trace. Which
+  reason it fails under is the restart count again: `device_unavailable` when the engine had to be
+  rebuilt, `empty_output` when it did not.
+
+- <a id="engine-restart"></a>**Engine restart** — the recorder throwing its `AVAudioEngine` away
+  mid-capture and building a fresh one, **immediately**, because the engine stopped under the
+  capture or stayed running while frames stopped arriving (#63). It is the app's whole recovery for
+  an audio device that will not stay bound, and it is *mitigation, not a cure*: measured on a
+  Bluetooth headset it settles most of the time and sometimes never does.
+  - **Two signals, both needed.** `engine.isRunning` catches the engine AVFoundation stopped;
+    a stall in frame arrival catches the engine that stays "running" and delivers nothing. Never a
+    sample-rate comparison: the ticket's device supports exactly one rate and already reports it,
+    so the rate the node claims is a fiction and forcing it provably changes nothing. The
+    `AVAudioEngineConfigurationChange` notification is not a signal either — it arrived *after*
+    `isRunning` had exposed the same failure, and it fires between recordings where it means
+    nothing.
+  - **Immediate, never backed off.** A pause lets the Bluetooth stack begin tearing the SCO link
+    down, so waiting is measurably worse than not waiting: immediate rebuilds settled 3/3, every
+    backoff policy tried settled 0–1/3.
+  - **Bounded.** Past the limit the recorder stops rebuilding and the item fails visibly naming the
+    device, rather than looping for as long as the key is held.
+  - The decision is a value (`CaptureWatchdog`), so the policy replays without a Bluetooth headset.
+  - The count is carried on the capture, and it is the app's only positive evidence that a device
+    was not delivering: the [dead capture](#dead-capture) verdict and the failure reason both read
+    it.
+
+- **Audio flowing** — the first frame of a capture actually arriving, which is **not** the gesture
+  and not `start` returning (#63). On a Bluetooth headset the two are 1.0–1.6 s apart, and on a
+  device that never binds the second one never happens. Everything the user can see follows the
+  audio: the menubar's `recording` glyph and its running clock start on the first frame, so a clock
+  that never starts *is* the live signal that nothing is being recorded. What follows the gesture
+  instead is only what has to: recording exclusivity, and the hotkey grammar's need to know a
+  release has a recording to stop.
 
 - **The tap install** — where the microphone is actually attached, and the one call in the app
   that could **kill the process** (#55). Under the same contention that produces a dead capture,
   `installTapOnBus` rejects a format it disagrees with by raising an `NSException`, and an
   `NSException` is not catchable in Swift: `do`/`catch` never sees it, the typed `RecorderError`
   never gets a chance, and the app terminates mid-gesture with whatever the user was about to say.
-  Closed on two fronts. The format is read off a **verified node** and handed straight to the
-  install, with the wav opened afterwards, so no window exists between the read and the install
-  for the format to go stale in (the same rate check #54 added is what verifies the node). What is
-  left crosses Objective-C through `ObjCExceptionBridge` — the only Objective-C in the project,
-  and the only place allowed to `@try` — so a raise arrives as a `RecorderError`, the item is
-  cleaned up, and the failure degrades like every other prerequisite (ADR-0004) instead of ending
-  the process.
+  Closed on two fronts. The format is read off the input node and handed straight to the install
+  with nothing in between, so no window exists for it to go stale in (the wav is not opened here at
+  all: it waits for the first buffer, #63). What is left crosses Objective-C through
+  `ObjCExceptionBridge` — the only Objective-C in the project, and the only place allowed to
+  `@try` — so a raise arrives as an error instead of ending the process. Since #63 it does not even
+  fail the recording: a raise fails that *attempt*, and the next
+  [engine restart](#engine-restart) tries again.
 
 - **Item directory** — storage is plain files, one directory per item (ADR-0003), no database.
   Holds `audio.mp3`, the three text stages, `pass1.txt` (the annotated pivot), and `meta.json`
@@ -236,7 +264,8 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   `recording` > `failed` > `processing` (= `queued`/`transcribing`/`organizing`) > `idle`. The
   icon does **not** signal "ready". It is **mode-agnostic**: dictation climbs the same ladder with no
   exception, and dictation has no other visual surface — the hold is the feedback, the arriving text
-  is the confirmation.
+  is the confirmation. `recording` means **audio flowing**, not the gesture (#63): the glyph waits
+  for the first frame, so it never claims to be recording a capture that is receiving nothing.
 
 - **The panel** — the menubar dropdown: *Acontecendo agora* (live pipeline, both modes),
   *Prontos* (organized braindumps, clamped preview, click-to-copy), *Precisam de você* (`failed` /

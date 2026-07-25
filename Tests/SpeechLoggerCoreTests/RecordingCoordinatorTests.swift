@@ -16,9 +16,18 @@ private enum StubError: Error { case micDenied, encodeFailed }
     /// 48 kHz, so an ordinary capture is a live one and only a test that means to
     /// simulate a dead device (#54) sets it to zero.
     var captureFrames: Int?
-    /// Whether the engine could not bind the device (#60). Default false: an ordinary
-    /// capture bound normally, and only a test simulating a short dead capture sets it.
-    var captureBindingFailed = false
+    /// How many times the recorder had to rebuild its engine under the capture (#63).
+    /// Default zero: an ordinary capture bound on the first try, and only a test
+    /// simulating a device that would not stay bound sets it. Non-zero is what the guard
+    /// reads as "the engine could not bind the device" (#60).
+    var captureRestarts = 0
+    /// The device the capture was opened against, for the failure that names it (#63).
+    var captureDeviceName: String?
+    /// The recorder's "audio is actually arriving" signal (#63). Fired by
+    /// `deliverFirstFrame()`, never by `start()`: the whole point is that opening the
+    /// mic and receiving audio are different events, seconds apart on a Bluetooth
+    /// headset.
+    var onAudioFlowing: (@MainActor () -> Void)?
     private(set) var startCount = 0
     private(set) var stopCount = 0
     private(set) var lastWav: URL?
@@ -33,6 +42,9 @@ private enum StubError: Error { case micDenied, encodeFailed }
         currentWav = url
     }
 
+    /// What a real recorder does the moment the capture's first buffer arrives.
+    func deliverFirstFrame() { onAudioFlowing?() }
+
     func stop() -> RecordingCapture {
         stopCount += 1
         let wav = currentWav!
@@ -41,7 +53,8 @@ private enum StubError: Error { case micDenied, encodeFailed }
         return RecordingCapture(
             wav: wav, duration: captureDuration,
             frames: captureFrames ?? Int(captureDuration * 48000),
-            windowEnergies: captureEnergies, deviceBindingFailed: captureBindingFailed)
+            windowEnergies: captureEnergies, engineRestarts: captureRestarts,
+            deviceName: captureDeviceName)
     }
 }
 
@@ -115,7 +128,7 @@ private final class Clock: @unchecked Sendable {
         defer { cleanup() }
         let coordinator = makeCoordinator()
         coordinator.start()
-        #expect(coordinator.isRecording)
+        #expect(coordinator.isCapturing)
         #expect(recorder.startCount == 1)
         let items = try store.list()
         #expect(items.count == 1)
@@ -127,7 +140,7 @@ private final class Clock: @unchecked Sendable {
         defer { cleanup() }
         let coordinator = makeCoordinator()
         coordinator.handle(.start)
-        #expect(coordinator.isRecording)
+        #expect(coordinator.isCapturing)
         #expect(try store.list().count == 1)
     }
 
@@ -141,6 +154,78 @@ private final class Clock: @unchecked Sendable {
         #expect(try store.list().count == 1)
     }
 
+    // MARK: - Nothing signals recording before the first frame (#63)
+
+    /// The mic being open and audio arriving are two facts, and on a Bluetooth headset
+    /// they are 1.0–1.6 s apart. The gesture grammar and exclusivity need the first one;
+    /// everything the user can see must follow the second, or the clock runs over a
+    /// capture that is receiving nothing.
+    @Test("the gesture opens the mic, and nothing signals recording until audio arrives")
+    func recordingSignalFollowsTheFirstFrame() throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        coordinator.start()
+        #expect(coordinator.isCapturing)
+        #expect(!coordinator.isRecording)
+
+        recorder.deliverFirstFrame()
+        #expect(coordinator.isRecording)
+        #expect(coordinator.isCapturing)
+    }
+
+    @Test("the first frame fires a state change, so the glyph and the clock can follow it")
+    func theFirstFrameFiresAStateChange() throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        var changes = 0
+        coordinator.onStateChange = { changes += 1 }
+        coordinator.start()
+        let afterStart = changes
+
+        recorder.deliverFirstFrame()
+        #expect(changes == afterStart + 1)
+    }
+
+    @Test("a capture that never receives audio never signals recording, and still stops")
+    func aDeadCaptureNeverSignalsRecording() async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        recorder.captureFrames = 0
+        coordinator.start()
+        #expect(!coordinator.isRecording)
+
+        await coordinator.stop(mode: .braindump)
+        #expect(!coordinator.isRecording)
+        #expect(!coordinator.isCapturing)
+    }
+
+    @Test("a discarded recording drops the signal too, so the glyph cannot stick on")
+    func discardClearsTheRecordingSignal() throws {
+        defer { cleanup() }
+        // The graceful-quit path (ADR-0006). It bypasses `stop`, so it has to clear both
+        // flags itself or the menubar would keep a live clock over a mic that is shut.
+        let coordinator = makeCoordinator()
+        coordinator.start()
+        recorder.deliverFirstFrame()
+        #expect(coordinator.isRecording)
+
+        coordinator.discardIfRecording()
+        #expect(!coordinator.isRecording)
+        #expect(!coordinator.isCapturing)
+    }
+
+    @Test("a frame arriving after the recording is over signals nothing")
+    func aLateFrameSignalsNothing() async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        coordinator.start()
+        recorder.deliverFirstFrame()
+        await coordinator.stop(mode: .braindump)
+
+        recorder.deliverFirstFrame()
+        #expect(!coordinator.isRecording)
+    }
+
     // MARK: - The accept path
 
     @Test("a normal recording encodes to mp3, lands queued, and the wav is deleted")
@@ -151,7 +236,7 @@ private final class Clock: @unchecked Sendable {
         coordinator.start()
         await coordinator.stop(mode: .braindump)
 
-        #expect(!coordinator.isRecording)
+        #expect(!coordinator.isCapturing)
         let items = try store.list()
         #expect(items.count == 1)
         #expect(items[0].state == .queued)
@@ -203,10 +288,10 @@ private final class Clock: @unchecked Sendable {
         let coordinator = makeCoordinator()
         coordinator.start()
         await coordinator.stop(mode: .braindump)  // item 1 -> queued
-        #expect(!coordinator.isRecording)
+        #expect(!coordinator.isCapturing)
 
         coordinator.start()  // a new recording, unblocked by the queued item
-        #expect(coordinator.isRecording)
+        #expect(coordinator.isCapturing)
         #expect(recorder.startCount == 2)
         let states = try store.list().map(\.state)
         #expect(states.contains(.queued))
@@ -307,13 +392,13 @@ private final class Clock: @unchecked Sendable {
         defer { cleanup() }
         // The gap #54 left and #60 closes: a device that opened then dropped inside the
         // warm-up window delivers a handful of frames and a short all-zero sequence,
-        // which reads as an accidental tap by length and energy alone. The recorder's
-        // binding-failure signal is what promotes it to a visible failure.
+        // which reads as an accidental tap by length and energy alone. The rebuilds the
+        // recorder had to spend are what promote it to a visible failure.
         let coordinator = makeCoordinator()
         recorder.captureDuration = 0.36
         recorder.captureFrames = Int(0.36 * 48000)
         recorder.captureEnergies = Array(repeating: 0, count: 18)
-        recorder.captureBindingFailed = true
+        recorder.captureRestarts = 3
         coordinator.start()
         await coordinator.stop(mode: mode)
 
@@ -321,7 +406,7 @@ private final class Clock: @unchecked Sendable {
         #expect(items.count == 1)
         #expect(items[0].state == .failed)
         #expect(items[0].meta.error?.stage == .recording)
-        #expect(items[0].meta.error?.reason == .emptyOutput)
+        #expect(items[0].meta.error?.reason == .deviceUnavailable)
         #expect(items[0].meta.mode == mode)
     }
 
@@ -334,11 +419,71 @@ private final class Clock: @unchecked Sendable {
         recorder.captureDuration = 0.36
         recorder.captureFrames = Int(0.36 * 48000)
         recorder.captureEnergies = Array(repeating: 0, count: 18)
-        recorder.captureBindingFailed = false
+        recorder.captureRestarts = 0
         coordinator.start()
         await coordinator.stop(mode: .braindump)
 
         #expect(try store.list().isEmpty)
+    }
+
+    // MARK: - The device the recorder could not hold (#63)
+
+    /// The end of the road for a Bluetooth headset that will not stay bound: the
+    /// watchdog rebuilt the engine until its budget ran out and audio never came. It
+    /// still fails visibly, but not as `empty_output` — that name is for a capture whose
+    /// cause is unknown, and here the cause is known and has a name.
+    @Test("a capture the engine had to be rebuilt for fails naming the device")
+    func deadCaptureAfterRestartsNamesTheDevice() async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        recorder.captureDuration = 0
+        recorder.captureFrames = 0
+        recorder.captureEnergies = []
+        recorder.captureRestarts = 10
+        recorder.captureDeviceName = "soundcore Life Q30"
+        coordinator.start()
+        await coordinator.stop(mode: .braindump)
+
+        let items = try store.list()
+        #expect(items.count == 1)
+        #expect(items[0].state == .failed)
+        #expect(items[0].meta.error?.stage == .recording)
+        #expect(items[0].meta.error?.reason == .deviceUnavailable)
+        let detail = try #require(items[0].meta.error?.detail)
+        #expect(detail.contains("soundcore Life Q30"))
+        #expect(detail.contains("10"))  // the rebuilds it cost, for the log
+    }
+
+    /// The other side of the same call: with no rebuild behind it there is no evidence
+    /// the device is at fault, so the failure keeps the name that claims less.
+    @Test("a dead capture on an engine that never needed rebuilding stays empty_output")
+    func deadCaptureWithoutRestartsStaysEmptyOutput() async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        recorder.captureDuration = 0
+        recorder.captureFrames = 0
+        recorder.captureEnergies = []
+        recorder.captureRestarts = 0
+        recorder.captureDeviceName = "MacBook Pro Microphone"
+        coordinator.start()
+        await coordinator.stop(mode: .braindump)
+
+        #expect(try store.list()[0].meta.error?.reason == .emptyOutput)
+    }
+
+    /// What the whole policy is for. The rebuilds are not a failure in themselves — a
+    /// capture that took three of them and then recorded speech is an ordinary recording.
+    @Test("a capture that recovered after rebuilds is queued like any other")
+    func recoveredCaptureIsAccepted() async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        recorder.captureDuration = 8.0
+        recorder.captureRestarts = 3
+        recorder.captureDeviceName = "soundcore Life Q30"
+        coordinator.start()
+        await coordinator.stop(mode: .braindump)
+
+        #expect(try store.list()[0].state == .queued)
     }
 
     @Test("a dead capture never hands off to the transcription lane")
@@ -546,7 +691,7 @@ private final class Clock: @unchecked Sendable {
         var reported: Error?
         coordinator.onRecorderStartFailed = { reported = $0 }
         coordinator.start()
-        #expect(!coordinator.isRecording)
+        #expect(!coordinator.isCapturing)
         #expect(try store.list().isEmpty)
         #expect(reported != nil)
     }
@@ -563,7 +708,7 @@ private final class Clock: @unchecked Sendable {
 
         recorder.throwOnStart = false
         coordinator.start()
-        #expect(coordinator.isRecording)
+        #expect(coordinator.isCapturing)
         #expect(recorder.startCount == 2)
         #expect(try store.list().count == 1)
     }
@@ -585,7 +730,7 @@ private final class Clock: @unchecked Sendable {
 
         coordinator.start()
 
-        #expect(!coordinator.isRecording)
+        #expect(!coordinator.isCapturing)
         #expect(recorder.startCount == 0)  // the mic is never opened
         #expect(try store.list().isEmpty)
         #expect(refused == state)
@@ -607,7 +752,7 @@ private final class Clock: @unchecked Sendable {
         coordinator.start()
 
         #expect(microphone.queryCount == 2)
-        #expect(!coordinator.isRecording)
+        #expect(!coordinator.isCapturing)
     }
 
     /// The refusal is reported and nothing else: no modal, no state change to recover
@@ -618,12 +763,12 @@ private final class Clock: @unchecked Sendable {
         let coordinator = makeCoordinator()
         microphone.state = .silenced
         coordinator.start()
-        #expect(!coordinator.isRecording)
+        #expect(!coordinator.isCapturing)
 
         microphone.state = .usable
         coordinator.start()
 
-        #expect(coordinator.isRecording)
+        #expect(coordinator.isCapturing)
         #expect(recorder.startCount == 1)
         #expect(try store.list().count == 1)
     }

@@ -4,7 +4,9 @@ import Foundation
 /// (ADR-0006). The icon reflects app status; it does **not** signal "ready" (that is
 /// the notification's job).
 public enum MenubarState: Sendable, Equatable {
-    /// The mic is live. Highest priority — recording always owns the glyph.
+    /// Audio is arriving from the mic. Highest priority — recording always owns the
+    /// glyph. It follows the first frame, not the gesture (#63): the glyph and its clock
+    /// never claim to be recording a capture that is receiving nothing.
     case recording
     /// At least one item is `failed`, or a preflight prerequisite is missing.
     /// Persistent and easy to miss, so it outranks live processing.
@@ -21,7 +23,8 @@ public enum MenubarState: Sendable, Equatable {
     /// `recording` > `failed` > `needsPermission` > `processing` > `idle`.
     ///
     /// - Parameters:
-    ///   - isRecording: the mic is currently live.
+    ///   - isRecording: audio is currently arriving from the mic (`RecordingCoordinator`'s
+    ///     own `isRecording`, which waits for the first frame — not `isCapturing`).
     ///   - hasFailed: any item is in the `failed` state, or preflight found a missing
     ///     prerequisite (they share the tier: both mean "something needs you", and the
     ///     panel is where they are told apart).

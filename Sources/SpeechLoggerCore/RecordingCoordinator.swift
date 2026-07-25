@@ -6,9 +6,18 @@ import Foundation
 @MainActor public protocol AudioRecording: AnyObject {
     /// Begin streaming the mic to a temp wav. Throws if capture cannot start (e.g.
     /// microphone access denied).
+    ///
+    /// It does **not** promise audio: opening the mic and receiving audio are separate
+    /// events, and on a Bluetooth headset the second one lands 1.0–1.6 s after the first
+    /// (#63). The recorder keeps rebuilding its engine in between; `onAudioFlowing` is
+    /// how the caller learns it worked.
     func start() throws
     /// Stop capture and return the recorded file plus its measurements.
     func stop() -> RecordingCapture
+    /// Called once per capture, on the first frame that actually arrives, so the caller
+    /// can signal "recording" off the audio rather than off the gesture (#63). Never
+    /// called for a capture that receives nothing — that silence is the signal.
+    var onAudioFlowing: (@MainActor () -> Void)? { get set }
 }
 
 /// The wav → mp3 encode seam (concrete impl: `AudioEncoder` over `ffmpeg`).
@@ -29,6 +38,11 @@ public protocol AudioEncoding: Sendable {
 /// reports as unusable (#45). Nothing else — a missing binary, a denied notification, a
 /// full pipeline — ever costs a thought.
 ///
+/// It keeps **two** notions of "recording", and they are not interchangeable (#63).
+/// `isCapturing` is the mic being open, which is what the gesture earned; `isRecording` is
+/// audio actually arriving, which is what the user is shown. On a Bluetooth headset they
+/// are seconds apart, and on a device that never binds the second one never becomes true.
+///
 /// Foundation-only and `@MainActor`, with the hardware seams injected, so the whole
 /// flow is unit-testable against a real store on a temp directory.
 @MainActor public final class RecordingCoordinator {
@@ -40,7 +54,21 @@ public protocol AudioEncoding: Sendable {
     /// microphone is testable without one, and so this target stays free of AVFoundation.
     private let microphone: @MainActor () -> MicrophoneState
 
-    /// The mic is live. Drives the `recording` glyph and the running clock.
+    /// The mic is open: a capture is in flight and a second one is refused. This is the
+    /// gesture's own truth, so it is what the hotkey grammar reads (`HotkeyDetector`
+    /// needs to know a release has a recording to stop) and what the quit sweep reads.
+    ///
+    /// Separate from `isRecording` since #63. Opening the mic does not mean audio is
+    /// arriving: on a Bluetooth headset the first frame lands 1.0–1.6 s later, and it may
+    /// never land at all.
+    public private(set) var isCapturing = false
+    /// Audio is actually arriving. Drives the `recording` glyph and the running clock,
+    /// and nothing else.
+    ///
+    /// It follows the first frame, not the gesture (#63). A clock that starts on the
+    /// gesture claims the app is recording the user's words while the engine is
+    /// delivering nothing, which is exactly how a lost braindump used to look like a
+    /// working one. Its *absence* is the live signal that the device is not delivering.
     public private(set) var isRecording = false
     /// The item currently being recorded, if any.
     private var currentItemID: String?
@@ -78,6 +106,22 @@ public protocol AudioEncoding: Sendable {
         self.encoder = encoder
         self.guardCheck = guardCheck
         self.microphone = microphone
+        // Installed once, for the recorder's whole life: the recorder fires it per
+        // capture and this class decides whether the capture it belongs to is still the
+        // one in flight.
+        recorder.onAudioFlowing = { [weak self] in self?.audioStartedFlowing() }
+    }
+
+    /// The recorder received its first frame. The one moment "recording" becomes true
+    /// for anything the user can see (#63).
+    ///
+    /// Guarded on `isCapturing` because the signal is asynchronous: a frame that lands
+    /// after the gesture ended belongs to a capture that is already being judged, and
+    /// turning the glyph on for it would light the menubar with the mic shut.
+    private func audioStartedFlowing() {
+        guard isCapturing, !isRecording else { return }
+        isRecording = true
+        onStateChange?()
     }
 
     /// Act on a hotkey gesture (#42). The grammar has already decided what the gesture
@@ -104,7 +148,7 @@ public protocol AudioEncoding: Sendable {
     /// is manufacturing the loss on purpose, and the refusal costs a moment where the
     /// capture would cost a whole braindump.
     public func start() {
-        guard !isRecording else { return }
+        guard !isCapturing else { return }
         let microphoneState = microphone()
         guard microphoneState.isUsable else {
             onRecordingRefused?(microphoneState)
@@ -126,14 +170,18 @@ public protocol AudioEncoding: Sendable {
             return
         }
         currentItemID = item.id
-        isRecording = true
+        isCapturing = true
+        // Deliberately not `isRecording`: that waits for the first frame
+        // (`audioStartedFlowing`). The refresh still happens, so a start that opened the
+        // mic and a start that was refused are told apart at the same moment as before.
         onStateChange?()
     }
 
     /// Stop the current recording and run it through the guard and encoder, under the
     /// `mode` the gesture earned. A call while not recording is a no-op.
     public func stop(mode: ItemMode) async {
-        guard isRecording, let id = currentItemID else { return }
+        guard isCapturing, let id = currentItemID else { return }
+        isCapturing = false
         isRecording = false
         currentItemID = nil
         let capture = recorder.stop()
@@ -146,7 +194,8 @@ public protocol AudioEncoding: Sendable {
     /// nothing to resume, so it leaves no `cancelled` off-ramp and no Trash entry —
     /// just as a too-short tap does. A call while not recording is a no-op.
     public func discardIfRecording() {
-        guard isRecording, let id = currentItemID else { return }
+        guard isCapturing, let id = currentItemID else { return }
+        isCapturing = false
         isRecording = false
         currentItemID = nil
         let capture = recorder.stop()
@@ -167,16 +216,18 @@ public protocol AudioEncoding: Sendable {
         case .failEmptyCapture:
             // The device gave us nothing while reporting itself usable (#54). The user
             // spoke and there is no audio to encode, so this is the one guard verdict
-            // that leaves a visible item: `empty_output`, the same name the
-            // post-transcription net uses, because an absent capture and a corrupt one
-            // produce the identical signal and naming a cause never observed would
-            // claim more than the evidence supports.
+            // that leaves a visible item.
+            //
+            // Which name it fails under turns on one thing: whether the recorder had to
+            // rebuild the engine to try to make the device deliver (#63). It did, so the
+            // device is the observed cause and the failure says so, naming it. It did
+            // not, so nothing was observed about the cause and the failure keeps
+            // `empty_output` — the same name the post-transcription net uses, because an
+            // absent capture and a corrupt one produce the identical signal and naming a
+            // cause never seen would claim more than the evidence supports.
             _ = try? store.fail(
-                id, stage: .recording, reason: .emptyOutput,
-                detail: "the microphone delivered no audio: \(capture.frames) frame(s), "
-                    + "\(capture.windowEnergies.count) window(s)"
-                    + (capture.deviceBindingFailed ? ", device did not bind (#60)" : ""),
-                mode: mode)
+                id, stage: .recording, reason: reason(for: capture),
+                detail: detail(for: capture), mode: mode)
             onRecordingFailed?(mode)
         case .discardTooShort, .discardSilent:
             // Nothing was said, or nothing was meant: either way it never becomes a
@@ -199,5 +250,25 @@ public protocol AudioEncoding: Sendable {
             }
         }
         onStateChange?()
+    }
+
+    /// Which recording-stage failure a dead capture is. See the note at the call site.
+    /// The question is the same one the guard asked — did the engine bind the device? —
+    /// so it is asked through the same property rather than re-deriving it from the count.
+    private func reason(for capture: RecordingCapture) -> FailureReason {
+        capture.deviceBindingFailed ? .deviceUnavailable : .emptyOutput
+    }
+
+    /// The line the panel's Finder click leads to. Every number the diagnosis needs and
+    /// nothing derived: what arrived, what was measured, what it cost to try, and — the
+    /// part the user can act on — which device it was.
+    private func detail(for capture: RecordingCapture) -> String {
+        let measurements =
+            "\(capture.frames) frame(s), \(capture.windowEnergies.count) window(s)"
+        guard capture.deviceBindingFailed else {
+            return "the microphone delivered no audio: \(measurements)"
+        }
+        return "\(capture.deviceLabel) delivered no audio after "
+            + "\(capture.engineRestarts) engine restart(s): \(measurements)"
     }
 }

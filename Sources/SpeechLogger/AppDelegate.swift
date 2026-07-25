@@ -152,7 +152,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.pipelineController = controller
 
         let hotkeyMonitor = HotkeyMonitor(
-            isRecording: { [weak coordinator] in coordinator?.isRecording ?? false },
+            // The mic being open, not audio flowing (#63): the grammar has to know a
+            // release has a recording to stop even while the device is still settling.
+            isRecording: { [weak coordinator] in coordinator?.isCapturing ?? false },
             onGesture: { [weak self] gesture in
                 // Arm before the gesture is carried out: the release *is* the arming
                 // event, and from this instant any app activation means the user is no

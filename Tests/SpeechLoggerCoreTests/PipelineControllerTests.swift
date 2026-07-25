@@ -204,7 +204,7 @@ import Testing
         try await waitUntil { (try? ctx.store.meta(for: organizing))?.state == .organizing }
 
         ctx.recording.start()  // a recording in progress
-        #expect(ctx.recording.isRecording)
+        #expect(ctx.recording.isCapturing)
         let recordingID = try #require(try ctx.store.list().first { $0.state == .recording }).id
 
         await ctx.controller.quitGracefully()
@@ -212,7 +212,7 @@ import Testing
         // In-flight processing is cancelled (retryable), the recording is gone silently.
         #expect(try ctx.store.meta(for: transcribing).state == .cancelled)
         #expect(try ctx.store.meta(for: organizing).state == .cancelled)
-        #expect(!ctx.recording.isRecording)
+        #expect(!ctx.recording.isCapturing)
         #expect(throws: StoreError.self) { try ctx.store.meta(for: recordingID) }
     }
 
@@ -335,6 +335,9 @@ private let rerunFinalText = FakeOrganizer.rewritten("ANNOTATED[raw transcript]"
 /// Writes a real temp wav on `start`, returns a normal capture on `stop`.
 @MainActor private final class StubRecorder: AudioRecording {
     private var wav: URL?
+    /// Never fired: nothing here turns on the recording signal (#63), only on the mic
+    /// being open, which is what the controller's discard reads.
+    var onAudioFlowing: (@MainActor () -> Void)?
     func start() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("pipeline-rec-\(UUID().uuidString).wav")
