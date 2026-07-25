@@ -328,6 +328,60 @@ private final class Clock: @unchecked Sendable {
         }
     }
 
+    @Test("a discard reports what it measured, so it is not invisible everywhere at once")
+    func discardReportsItsMeasurements() async throws {
+        defer { cleanup() }
+        // A discard leaves no item on purpose (#46), which left the whole verdict with
+        // nowhere to be seen: a five-second braindump read as silence and vanished with
+        // no item, no failure and no log line, and the only reason the cause was ever
+        // found is that an energy dump happened to be switched on (#67). The verdict now
+        // says what it measured, and the app target logs it.
+        let coordinator = makeCoordinator()
+        var discards: [DiscardedRecording] = []
+        coordinator.onRecordingDiscarded = { discards.append($0) }
+        recorder.captureDuration = 5.2
+        recorder.captureEnergies = RecordedEnergy.silentDoubleTap
+        coordinator.start()
+        await coordinator.stop(mode: .braindump)
+
+        #expect(try store.list().isEmpty)
+        #expect(discards.count == 1)
+        let report = try #require(discards.first)
+        #expect(report.decision == .discardSilent)
+        #expect(report.mode == .braindump)
+        #expect(report.duration == 5.2)
+        #expect(report.windows == RecordedEnergy.silentDoubleTap.count)
+        #expect(report.peak == RecordedEnergy.silentDoubleTap.max())
+        #expect(report.loudWindowFloor == RecordingGuard().loudWindowFloor(in: RecordedEnergy.silentDoubleTap))
+        #expect(report.loudFraction < RecordingGuard().minimumLoudFraction)
+    }
+
+    @Test("an accepted recording reports no discard")
+    func acceptReportsNoDiscard() async throws {
+        defer { cleanup() }
+        let coordinator = makeCoordinator()
+        var discards: [DiscardedRecording] = []
+        coordinator.onRecordingDiscarded = { discards.append($0) }
+        coordinator.start()
+        await coordinator.stop(mode: .braindump)
+        #expect(discards.isEmpty)
+    }
+
+    @Test("a too-short tap reports its own verdict, not the silent one")
+    func shortTapReportsItsVerdict() async throws {
+        defer { cleanup() }
+        // The two discards are one outcome and two causes, and the log line is the only
+        // place the difference is ever visible.
+        let coordinator = makeCoordinator()
+        var discards: [DiscardedRecording] = []
+        coordinator.onRecordingDiscarded = { discards.append($0) }
+        recorder.captureDuration = 0.4
+        recorder.captureEnergies = Array(repeating: 0.09, count: 20)
+        coordinator.start()
+        await coordinator.stop(mode: .braindump)
+        #expect(discards.map(\.decision) == [.discardTooShort])
+    }
+
     @Test("a recording that is silent apart from one transient spike is discarded")
     func singleSpikeDiscarded() async throws {
         defer { cleanup() }

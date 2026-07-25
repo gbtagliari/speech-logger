@@ -297,11 +297,13 @@ struct RecordingGuardTests {
 
     // MARK: - Thresholds
 
-    @Test("the loud-window floor is injectable and inclusive of loudness")
-    func loudWindowFloorInjectable() {
+    @Test("the loud-window floor cap is injectable and inclusive of loudness")
+    func loudWindowFloorCapInjectable() {
+        // A sequence with no quiet windows in it, so the cap is what decides: the level
+        // the derivation would have produced (8 x 0.05) is above everything in the file.
         let sequence = Array(repeating: Float(0.05), count: 100)
-        let strict = RecordingGuard(loudWindowFloor: 0.06, minimumLoudFraction: 0.5)
-        let lenient = RecordingGuard(loudWindowFloor: 0.05, minimumLoudFraction: 0.5)
+        let strict = RecordingGuard(loudWindowFloorCap: 0.06, minimumLoudFraction: 0.5)
+        let lenient = RecordingGuard(loudWindowFloorCap: 0.05, minimumLoudFraction: 0.5)
         #expect(strict.evaluate(mode: .braindump, duration: 5, frames: frames(5), windowEnergies: sequence) == .discardSilent)
         #expect(lenient.evaluate(mode: .braindump, duration: 5, frames: frames(5), windowEnergies: sequence) == .accept)
     }
@@ -309,10 +311,87 @@ struct RecordingGuardTests {
     @Test("the loud-window fraction is injectable and inclusive of acceptance")
     func loudFractionInjectable() {
         let sequence = speech(loud: 10, in: 100)  // exactly 10%
-        let strict = RecordingGuard(loudWindowFloor: 0.02, minimumLoudFraction: 0.11)
-        let lenient = RecordingGuard(loudWindowFloor: 0.02, minimumLoudFraction: 0.10)
+        let strict = RecordingGuard(minimumLoudFraction: 0.11)
+        let lenient = RecordingGuard(minimumLoudFraction: 0.10)
         #expect(strict.evaluate(mode: .braindump, duration: 5, frames: frames(5), windowEnergies: sequence) == .discardSilent)
         #expect(lenient.evaluate(mode: .braindump, duration: 5, frames: frames(5), windowEnergies: sequence) == .accept)
+    }
+
+    // MARK: - The floor follows the recording's own noise (#67)
+
+    @Test("the same recording at a tenth of the gain gets the same verdict")
+    func verdictIsGainInvariant() {
+        // The property the whole rule exists for. Input gain scales every window by the
+        // same factor, and it is set by a device and a slider the guard cannot see: the
+        // internal microphone at 23/100 puts real speech an order of magnitude under the
+        // same voice on a headset. A floor derived from the recording scales with it.
+        let spoken = speech(loud: 100, in: 400)
+        let quiet = spoken.map { $0 / 10 }
+        #expect(guardCheck.evaluate(mode: .braindump, duration: 8.0, frames: frames(8.0), windowEnergies: spoken) == .accept)
+        #expect(guardCheck.evaluate(mode: .braindump, duration: 8.0, frames: frames(8.0), windowEnergies: quiet) == .accept)
+    }
+
+    @Test("a recording with no quiet windows at all is still accepted")
+    func speechEndToEndIsAccepted() {
+        // Where a purely relative floor breaks: a recording whose every window is speech
+        // has no noise floor in it to measure, so its own quiet level *is* speech and a
+        // multiple of that is above everything in the file. The cap is what stops the
+        // derived floor there — it never rises past the measured absolute floor, so the
+        // strictest this test can ever get is the rule that shipped before.
+        #expect(guardCheck.evaluate(mode: .braindump, duration: 8.0, frames: frames(8.0), windowEnergies: Array(repeating: Float(0.09), count: 400)) == .accept)
+    }
+
+    @Test("a loud transient never carries a quiet recording, at any gain")
+    func transientNeverCarriesAtLowGain() {
+        // The rule the relative floor must not weaken: the key click of the gesture is
+        // proportionally louder than the room it happens in, so it *does* clear a floor
+        // derived from that room. The fraction is what discards it — one window is one
+        // window, whatever it measured.
+        var sequence = quietRoom(windows: 100).map { $0 / 10 }
+        sequence[42] = 0.035
+        #expect(guardCheck.evaluate(mode: .braindump, duration: 2.0, frames: frames(2.0), windowEnergies: sequence) == .discardSilent)
+    }
+
+    @Test("the noise-floor multiple is injectable")
+    func noiseFloorMultipleInjectable() {
+        // 20 windows at 8x the recording's own floor, in a sequence whose quiet level is
+        // 0.001: at a multiple of 8 they are loud, at 9 they are not. The cap is out of
+        // the way at both (8 x 0.001 is well under 0.02), which is what makes this an
+        // observation of the multiple and not of the cap.
+        var sequence = Array(repeating: Float(0.001), count: 100)
+        for index in 0..<20 { sequence[index * 5] = 0.008 }
+        let lenient = RecordingGuard(noiseFloorMultiple: 8)
+        let strict = RecordingGuard(noiseFloorMultiple: 9)
+        #expect(lenient.evaluate(mode: .braindump, duration: 2.0, frames: frames(2.0), windowEnergies: sequence) == .accept)
+        #expect(strict.evaluate(mode: .braindump, duration: 2.0, frames: frames(2.0), windowEnergies: sequence) == .discardSilent)
+    }
+
+    @Test("the derived floor is never above the cap, and never below a measurable one")
+    func derivedFloorIsBoundedByTheCap() {
+        // The two ends of the derivation, read directly rather than through a verdict.
+        let quiet = quietRoom(windows: 100)  // 0.0006 throughout
+        #expect(guardCheck.loudWindowFloor(in: quiet) == 0.0006 * guardCheck.noiseFloorMultiple)
+        #expect(guardCheck.loudWindowFloor(in: Array(repeating: Float(0.09), count: 100)) == guardCheck.loudWindowFloorCap)
+    }
+
+    @Test("a sequence with nothing to measure a floor from falls back to the cap")
+    func floorFallsBackToTheCapWithoutAMeasurement() {
+        // Exact zeros are the absence of a measurement, not a noise floor of zero — a
+        // multiple of zero is zero, which would make every window loud and accept any
+        // capture the dead-capture verdict let through. With nothing positive in the
+        // sequence there is nothing to derive from, and the absolute cap stands.
+        #expect(guardCheck.loudWindowFloor(in: digitalZero(windows: 20)) == guardCheck.loudWindowFloorCap)
+        #expect(guardCheck.loudWindowFloor(in: []) == guardCheck.loudWindowFloorCap)
+    }
+
+    @Test("the noise floor is read off the windows that measured something")
+    func noiseFloorIgnoresWarmUpZeros() {
+        // Every recording opens with a run of exact zeros while the device spins up. They
+        // are not the quiet end of the room's noise: counted in, they would drag the
+        // percentile to zero and take the floor with it, so a dead-ish capture with one
+        // loud blip would sail through.
+        let warmedUp = digitalZero(windows: 37) + quietRoom(windows: 100)
+        #expect(guardCheck.loudWindowFloor(in: warmedUp) == guardCheck.loudWindowFloor(in: quietRoom(windows: 100)))
     }
 
     // MARK: - Replayed real recordings
@@ -353,18 +432,30 @@ struct RecordingGuardTests {
         #expect(guardCheck.evaluate(mode: .dictation, duration: 1.04, frames: frames(1.04), windowEnergies: RecordedEnergy.shortUtterance) == .accept)
     }
 
+    @Test("real speech recorded at a low input gain is accepted")
+    func replaysLowGainSpeech() {
+        // The ticket (#67). 5.2 s of ordinary speech on the internal microphone with the
+        // system input volume at 23/100: the loudest window in the file is 0.01933, so
+        // against the absolute floor of 0.02 not one window was loud and the whole
+        // braindump was deleted with no item and no trace.
+        #expect(RecordedEnergy.lowGainSpeech.allSatisfy { $0 < 0.02 })
+        #expect(guardCheck.evaluate(mode: .braindump, duration: 5.20, frames: frames(5.20), windowEnergies: RecordedEnergy.lowGainSpeech) == .accept)
+    }
+
     @Test("the real samples stay on their own side even with the thresholds pushed hard")
     func recordedSamplesLeaveMargin() {
         // The gap the defaults sit in, asserted rather than left to a comment. Real
-        // speech still reads as speech with the floor at 5x the default and the
-        // fraction at 2x (it puts 14% of its windows over 0.1); a real silent
-        // double-tap still reads as silence with the floor at a fifth of the default
-        // and the fraction at a fifth (its lone click is 0.6% of the recording). If a
-        // future tuning closes that gap, this fails before a recording is deleted in
-        // the field.
-        let strict = RecordingGuard(loudWindowFloor: 0.1, minimumLoudFraction: 0.10)
+        // recording that holds speech still reads as speech with the multiple at 2x the
+        // default and the fraction at 5x (the sparsest of them, a 280 ms utterance, still
+        // puts 27% of its windows over the derived floor); a real silent double-tap still
+        // reads as silence with the multiple at half and the fraction at a fifth (its lone
+        // click is 0.6% of the recording). If a future tuning closes that gap, this fails
+        // before a recording is deleted in the field.
+        let strict = RecordingGuard(noiseFloorMultiple: 16, minimumLoudFraction: 0.25)
         #expect(strict.evaluate(mode: .braindump, duration: 6.40, frames: frames(6.40), windowEnergies: RecordedEnergy.normalSpeech) == .accept)
-        let lenient = RecordingGuard(loudWindowFloor: 0.004, minimumLoudFraction: 0.01)
+        #expect(strict.evaluate(mode: .braindump, duration: 5.20, frames: frames(5.20), windowEnergies: RecordedEnergy.lowGainSpeech) == .accept)
+        #expect(strict.evaluate(mode: .dictation, duration: 1.04, frames: frames(1.04), windowEnergies: RecordedEnergy.shortUtterance) == .accept)
+        let lenient = RecordingGuard(noiseFloorMultiple: 4, minimumLoudFraction: 0.01)
         #expect(lenient.evaluate(mode: .braindump, duration: 3.34, frames: frames(3.34), windowEnergies: RecordedEnergy.silentDoubleTap) == .discardSilent)
     }
 

@@ -139,6 +139,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator.onRecordingFailed = { [weak self] mode in
             if mode == .dictation { self?.announceUndeliveredDictation() }
         }
+        // A discard is silent to the user by design (#46) and was silent everywhere else
+        // too, so a recording deleted by a wrong threshold left nothing to diagnose it
+        // with (#67). This is that line. `notice`, not `error`: the overwhelmingly common
+        // case is the accidental tap it exists to swallow.
+        coordinator.onRecordingDiscarded = { [weak self] discard in
+            self?.log.notice(
+                """
+                discarded a \(String(describing: discard.mode), privacy: .public) recording \
+                (\(String(describing: discard.decision), privacy: .public)): \
+                \(discard.duration, format: .fixed(precision: 2), privacy: .public) s, \
+                \(discard.windows, privacy: .public) window(s), peak \
+                \(discard.peak, format: .fixed(precision: 5), privacy: .public), \
+                \(discard.loudFraction * 100, format: .fixed(precision: 1), privacy: .public)% \
+                over a floor of \
+                \(discard.loudWindowFloor, format: .fixed(precision: 5), privacy: .public)
+                """)
+        }
         self.coordinator = coordinator
 
         // The cross-cutting control of in-flight work (#22, ADR-0006): manual stop,
