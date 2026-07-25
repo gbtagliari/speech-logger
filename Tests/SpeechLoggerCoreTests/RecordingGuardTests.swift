@@ -370,8 +370,8 @@ struct RecordingGuardTests {
     func derivedFloorIsBoundedByTheCap() {
         // The two ends of the derivation, read directly rather than through a verdict.
         let quiet = quietRoom(windows: 100)  // 0.0006 throughout
-        #expect(guardCheck.loudWindowFloor(in: quiet) == 0.0006 * guardCheck.noiseFloorMultiple)
-        #expect(guardCheck.loudWindowFloor(in: Array(repeating: Float(0.09), count: 100)) == guardCheck.loudWindowFloorCap)
+        #expect(guardCheck.measure(quiet)?.loudWindowFloor == 0.0006 * guardCheck.noiseFloorMultiple)
+        #expect(guardCheck.measure(Array(repeating: Float(0.09), count: 100))?.loudWindowFloor == guardCheck.loudWindowFloorCap)
     }
 
     @Test("a sequence with nothing to measure a floor from falls back to the cap")
@@ -380,8 +380,16 @@ struct RecordingGuardTests {
         // multiple of zero is zero, which would make every window loud and accept any
         // capture the dead-capture verdict let through. With nothing positive in the
         // sequence there is nothing to derive from, and the absolute cap stands.
-        #expect(guardCheck.loudWindowFloor(in: digitalZero(windows: 20)) == guardCheck.loudWindowFloorCap)
-        #expect(guardCheck.loudWindowFloor(in: []) == guardCheck.loudWindowFloorCap)
+        #expect(guardCheck.measure(digitalZero(windows: 20))?.loudWindowFloor == guardCheck.loudWindowFloorCap)
+    }
+
+    @Test("a recording with no windows at all is not measured")
+    func emptySequenceHasNoMeasurement() {
+        // No window closed, so there is no floor and no fraction — and a caller that
+        // logs the measurement must not be handed a threshold nothing was compared
+        // against. It is the same distinction `evaluate` makes: measuring nothing is not
+        // measuring silence.
+        #expect(guardCheck.measure([]) == nil)
     }
 
     @Test("the noise floor is read off the windows that measured something")
@@ -391,7 +399,7 @@ struct RecordingGuardTests {
         // percentile to zero and take the floor with it, so a dead-ish capture with one
         // loud blip would sail through.
         let warmedUp = digitalZero(windows: 37) + quietRoom(windows: 100)
-        #expect(guardCheck.loudWindowFloor(in: warmedUp) == guardCheck.loudWindowFloor(in: quietRoom(windows: 100)))
+        #expect(guardCheck.measure(warmedUp)?.loudWindowFloor == guardCheck.measure(quietRoom(windows: 100))?.loudWindowFloor)
     }
 
     // MARK: - Replayed real recordings
@@ -454,6 +462,9 @@ struct RecordingGuardTests {
         let strict = RecordingGuard(noiseFloorMultiple: 16, minimumLoudFraction: 0.25)
         #expect(strict.evaluate(mode: .braindump, duration: 6.40, frames: frames(6.40), windowEnergies: RecordedEnergy.normalSpeech) == .accept)
         #expect(strict.evaluate(mode: .braindump, duration: 5.20, frames: frames(5.20), windowEnergies: RecordedEnergy.lowGainSpeech) == .accept)
+        // The utterance is the one whose derived floor hits the cap at 16x (0.00177 x 16
+        // is over 0.02), so this line sweeps the cap where the two above sweep the
+        // multiple. Both paths have to keep real speech, which is why it stays.
         #expect(strict.evaluate(mode: .dictation, duration: 1.04, frames: frames(1.04), windowEnergies: RecordedEnergy.shortUtterance) == .accept)
         let lenient = RecordingGuard(noiseFloorMultiple: 4, minimumLoudFraction: 0.01)
         #expect(lenient.evaluate(mode: .braindump, duration: 3.34, frames: frames(3.34), windowEnergies: RecordedEnergy.silentDoubleTap) == .discardSilent)

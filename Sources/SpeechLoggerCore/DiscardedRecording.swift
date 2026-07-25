@@ -10,9 +10,9 @@ import Foundation
 /// cause is that an energy dump happened to be switched on.
 ///
 /// So the verdict carries its measurements out to the caller, which logs them. Every
-/// field is an input to the verdict or the number it was compared against, so the line
-/// they make is enough to tell "you said nothing" from "the floor was wrong" without
-/// re-running the recording that no longer exists.
+/// field is something the recording measured, so the line they make is enough to tell
+/// "you said nothing" from "the floor was wrong" without re-running a recording that no
+/// longer exists.
 public struct DiscardedRecording: Sendable, Equatable {
     /// Which discard it was: too short, or no speech in it.
     public let decision: GuardDecision
@@ -24,22 +24,21 @@ public struct DiscardedRecording: Sendable, Equatable {
     public let windows: Int
     /// The loudest window in the recording, in RMS amplitude (0…1).
     public let peak: Float
-    /// The floor this recording earned, derived from its own noise (`RecordingGuard`).
-    public let loudWindowFloor: Float
-    /// The share of windows that reached that floor. Against `minimumLoudFraction` this
-    /// is the whole speech verdict, in one number.
-    public let loudFraction: Double
+    /// The speech test's two numbers, or **nil when there were no windows to measure**.
+    /// A capture that closed no window has no floor and no fraction, and printing the
+    /// bare cap next to a 0% that was never counted would put a threshold in the log
+    /// that nothing was ever compared against.
+    public let speech: RecordingGuard.SpeechMeasurement?
 
     public init(
         decision: GuardDecision, mode: ItemMode, duration: TimeInterval, windows: Int,
-        peak: Float, loudWindowFloor: Float, loudFraction: Double
+        peak: Float, speech: RecordingGuard.SpeechMeasurement?
     ) {
         self.decision = decision
         self.mode = mode
         self.duration = duration
         self.windows = windows
         self.peak = peak
-        self.loudWindowFloor = loudWindowFloor
-        self.loudFraction = loudFraction
+        self.speech = speech
     }
 }

@@ -347,13 +347,33 @@ private final class Clock: @unchecked Sendable {
         #expect(try store.list().isEmpty)
         #expect(discards.count == 1)
         let report = try #require(discards.first)
+        // The same guard the coordinator was built with, so the logged floor is the one
+        // the verdict was actually made against.
+        let guardCheck = RecordingGuard()
         #expect(report.decision == .discardSilent)
         #expect(report.mode == .braindump)
         #expect(report.duration == 5.2)
         #expect(report.windows == RecordedEnergy.silentDoubleTap.count)
         #expect(report.peak == RecordedEnergy.silentDoubleTap.max())
-        #expect(report.loudWindowFloor == RecordingGuard().loudWindowFloor(in: RecordedEnergy.silentDoubleTap))
-        #expect(report.loudFraction < RecordingGuard().minimumLoudFraction)
+        #expect(report.speech == guardCheck.measure(RecordedEnergy.silentDoubleTap))
+        #expect(try #require(report.speech).loudFraction < guardCheck.minimumLoudFraction)
+    }
+
+    @Test("a discard with nothing measured carries no speech numbers")
+    func discardWithoutWindowsCarriesNoMeasurement() async throws {
+        defer { cleanup() }
+        // A capture that closed no window has no floor and no fraction. The report says
+        // so rather than carrying the bare cap next to a 0% nothing was counted for
+        // (#67) — the log line would otherwise name a threshold no decision used.
+        let coordinator = makeCoordinator()
+        var discards: [DiscardedRecording] = []
+        coordinator.onRecordingDiscarded = { discards.append($0) }
+        recorder.captureDuration = 0.4
+        recorder.captureEnergies = []
+        coordinator.start()
+        await coordinator.stop(mode: .braindump)
+        #expect(discards.map(\.decision) == [.discardTooShort])
+        #expect(discards.first?.speech == nil)
     }
 
     @Test("an accepted recording reports no discard")

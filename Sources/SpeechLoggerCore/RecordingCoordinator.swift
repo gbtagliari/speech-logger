@@ -245,7 +245,7 @@ public protocol AudioEncoding: Sendable {
             // measurements go out for the app to log, since the deleted recording is the
             // only other evidence there would have been.
             try? store.discard(id)
-            report(decision: decision, mode: mode, capture: capture)
+            reportDiscard(decision, mode: mode, capture: capture)
         case .accept:
             do {
                 let mp3 = try store.contentURL(of: ItemFile.audio, for: id)
@@ -263,16 +263,17 @@ public protocol AudioEncoding: Sendable {
     }
 
     /// Hand the discard's measurements to whoever is listening, asking the same guard
-    /// that produced the verdict for the floor it used — a second guard with its own
-    /// thresholds would log a number the decision was never made against.
-    private func report(decision: GuardDecision, mode: ItemMode, capture: RecordingCapture) {
+    /// that produced the verdict for the numbers it measured — a second guard with its
+    /// own thresholds would log a floor the decision was never made against.
+    private func reportDiscard(
+        _ decision: GuardDecision, mode: ItemMode, capture: RecordingCapture
+    ) {
         onRecordingDiscarded?(
             DiscardedRecording(
                 decision: decision, mode: mode, duration: capture.duration,
                 windows: capture.windowEnergies.count,
                 peak: capture.windowEnergies.max() ?? 0,
-                loudWindowFloor: guardCheck.loudWindowFloor(in: capture.windowEnergies),
-                loudFraction: guardCheck.loudFraction(in: capture.windowEnergies)))
+                speech: guardCheck.measure(capture.windowEnergies)))
     }
 
     /// Which recording-stage failure a dead capture is. See the note at the call site.

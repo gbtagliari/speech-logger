@@ -227,32 +227,46 @@ public struct RecordingGuard: Sendable {
         // perfectly good. Keeping it costs a hallucinated item at worst; discarding
         // it would delete a whole braindump on the strength of a broken measurement,
         // which is the one error this guard must not make.
-        guard !windowEnergies.isEmpty else { return .accept }
-        return loudFraction(in: windowEnergies) >= minimumLoudFraction ? .accept : .discardSilent
+        guard let measurement = measure(windowEnergies) else { return .accept }
+        return measurement.loudFraction >= minimumLoudFraction ? .accept : .discardSilent
     }
 
-    /// The share of windows that count as loud against the floor this recording earns.
-    /// Public so the caller can say, in a log line, *why* a recording it just discarded
-    /// read as silent — the verdict alone leaves nothing to look at (#67).
-    public func loudFraction(in windowEnergies: [Float]) -> Double {
-        guard !windowEnergies.isEmpty else { return 0 }
-        let floor = loudWindowFloor(in: windowEnergies)
-        let loud = windowEnergies.reduce(into: 0) { count, energy in
-            if energy >= floor { count += 1 }
-        }
-        return Double(loud) / Double(windowEnergies.count)
-    }
-
-    /// The RMS a window in *this* recording has to reach to count as loud:
-    /// `noiseFloorMultiple` times the recording's own quiet level, never above
-    /// `loudWindowFloorCap`.
+    /// The speech test's two numbers for one recording: the floor it earned, and how much
+    /// of it cleared that floor.
     ///
-    /// With nothing positive in the sequence there is no quiet level to derive from — a
-    /// multiple of zero is zero, which would count every window loud — so the cap stands
-    /// on its own. That case is a dead capture or a warm-up run, both already judged.
-    public func loudWindowFloor(in windowEnergies: [Float]) -> Float {
-        guard let quiet = quietLevel(in: windowEnergies) else { return loudWindowFloorCap }
-        return min(quiet * noiseFloorMultiple, loudWindowFloorCap)
+    /// One value rather than two calls, because the fraction is meaningless without the
+    /// floor it was counted against, and deriving them separately would sort the window
+    /// sequence twice.
+    public struct SpeechMeasurement: Sendable, Equatable {
+        /// The RMS a window in *this* recording had to reach to count as loud.
+        public let loudWindowFloor: Float
+        /// The share of windows that reached it. Against `minimumLoudFraction`, this is
+        /// the whole speech verdict.
+        public let loudFraction: Double
+    }
+
+    /// Measure a recording's speech content, or nil when there are no windows to measure
+    /// — which is not a measurement of silence (see the note in `evaluate`).
+    ///
+    /// Public because the caller logs it: a discard leaves no item, so without these two
+    /// numbers a recording deleted by a wrong threshold leaves nothing to diagnose (#67).
+    ///
+    /// The floor is `noiseFloorMultiple` times the recording's own quiet level, never
+    /// above `loudWindowFloorCap`. With nothing positive in the sequence there is no quiet
+    /// level to derive from — a multiple of zero is zero, which would count every window
+    /// loud — so the cap stands on its own. That case is a dead capture or a warm-up run,
+    /// both already judged before this.
+    public func measure(_ windowEnergies: [Float]) -> SpeechMeasurement? {
+        guard !windowEnergies.isEmpty else { return nil }
+        let loudWindowFloor =
+            quietLevel(in: windowEnergies)
+            .map { min($0 * noiseFloorMultiple, loudWindowFloorCap) } ?? loudWindowFloorCap
+        let loud = windowEnergies.reduce(into: 0) { count, energy in
+            if energy >= loudWindowFloor { count += 1 }
+        }
+        return SpeechMeasurement(
+            loudWindowFloor: loudWindowFloor,
+            loudFraction: Double(loud) / Double(windowEnergies.count))
     }
 
     /// The recording's own noise floor: the `quietWindowPercentile` of the windows that

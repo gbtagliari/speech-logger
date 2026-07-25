@@ -144,6 +144,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // with (#67). This is that line. `notice`, not `error`: the overwhelmingly common
         // case is the accidental tap it exists to swallow.
         coordinator.onRecordingDiscarded = { [weak self] discard in
+            // The speech numbers are absent when no window closed, and the line says so
+            // rather than printing a floor nothing was compared against.
+            let speech =
+                discard.speech.map {
+                    String(
+                        format: "%.1f%% over a floor of %.5f", $0.loudFraction * 100,
+                        $0.loudWindowFloor)
+                } ?? "no window measured"
             self?.log.notice(
                 """
                 discarded a \(String(describing: discard.mode), privacy: .public) recording \
@@ -151,9 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 \(discard.duration, format: .fixed(precision: 2), privacy: .public) s, \
                 \(discard.windows, privacy: .public) window(s), peak \
                 \(discard.peak, format: .fixed(precision: 5), privacy: .public), \
-                \(discard.loudFraction * 100, format: .fixed(precision: 1), privacy: .public)% \
-                over a floor of \
-                \(discard.loudWindowFloor, format: .fixed(precision: 5), privacy: .public)
+                \(speech, privacy: .public)
                 """)
         }
         self.coordinator = coordinator
