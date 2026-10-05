@@ -4,10 +4,10 @@ import QuartzCore
 import SpeechLoggerCore
 import os
 
-/// Captures the microphone to a native wav in a temp file via `AVAudioEngine`,
-/// streamed frame-by-frame so RAM stays O(1) regardless of length. The recorded wav
-/// feeds `ffmpeg`, which downmixes to mono/16 kHz (ADR-0002) — the app records
-/// native and does not resample itself.
+/// Captures the microphone to a 16 kHz mono wav in a temp file via `AVAudioEngine`,
+/// streamed frame-by-frame so RAM stays O(1) regardless of length. Every buffer is
+/// converted to that one format at the tap (`CaptureState`, #69), because a device can
+/// change its rate mid-capture; the wav then feeds `ffmpeg` for the mp3 (ADR-0002).
 ///
 /// While recording it accumulates the measurements the guard needs: the per-window RMS
 /// sequence and the frame count (which gives both the duration and, at zero, the fact
@@ -32,13 +32,12 @@ import os
 ///
 /// Four consequences run through everything below:
 ///
-/// - **Nothing is derived from a format the engine merely resolved.** The wav's format,
-///   the energy window's size and the sample rate the duration divides by all come from
-///   the *first buffer that actually arrives* (`CaptureState`). A node reporting 44.1 kHz
-///   on a device that supports only 16 kHz is not an alternative resolution to reconcile
-///   with; it is a rate the device does not have. #59's rate-forcing layer was deleted
-///   rather than tuned, because on the ticket's device the write it performs provably
-///   cannot do anything.
+/// - **Nothing is derived from a format the engine resolved, or from any one buffer's.**
+///   The wav, the energy windows and the duration are all in the fixed capture format,
+///   and each buffer is converted from whatever format it arrived in (`CaptureState`).
+///   On macOS 27 a headset's buffers change rate mid-capture (#69), so no single format
+///   is the capture's. #59's rate-forcing layer was deleted rather than tuned, because on
+///   the ticket's device the write it performs provably cannot do anything.
 /// - **`AVAudioEngineConfigurationChange` is not observed at all.** It is not a usable
 ///   trigger: in one measured run it arrived 129 ms *after* `isRunning` had already
 ///   exposed the same failure, and it also fires between recordings, where it means
@@ -124,7 +123,7 @@ import os
         var hasGivenUp = false
         /// The frame count at the last tick, so a tick can tell arrival from a plateau.
         var framesAtLastTick: AVAudioFrameCount = 0
-        /// When frames last advanced, or when the engine was last started if they never
+        /// When frames last advanced, or when the last engine open returned if they never
         /// have. Monotonic (`CACurrentMediaTime`), never wall-clock.
         var lastProgressAt: CFTimeInterval = 0
     }
@@ -151,15 +150,11 @@ import os
 
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("speech-logger-\(UUID().uuidString).wav")
-        // The wav is *named* here and opened by the first buffer that arrives, against
-        // that buffer's own format. Opening it now would mean guessing the format from a
-        // node that has not resolved the device yet, and every buffer after a rebuild
-        // that resolved differently would fail to write into it.
-        state = CaptureState(wav: url, windowDuration: RecordingCapture.windowDuration)
+        state = CaptureState(wav: url)
         wavURL = url
         deviceName = Microphone.defaultInputDeviceName
 
-        progress = Progress(lastProgressAt: CACurrentMediaTime())
+        progress = Progress()
         isCapturing = true
 
         // Best effort, and deliberately not fatal. A first open that fails is the
@@ -168,6 +163,11 @@ import os
         // engine on its next tick and rebuilds; if it never comes up, the capture fails
         // visibly at `stop` naming the device, which beats a log line nobody reads.
         openEngine()
+        // Counted from the open *returning*, as `restart` does (#69): `engine.start()` can
+        // block for seconds on a Bluetooth headset, and that wait is not the device
+        // stalling. Counted from before it, the first tick rebuilt an engine whose IO had
+        // come up moments earlier, and paid the blocking open a second time.
+        progress.lastProgressAt = CACurrentMediaTime()
         startWatchdog()
     }
 
@@ -187,13 +187,6 @@ import os
             // — record it rather than swallow it.
             log.warning("audio capture dropped \(snapshot.droppedWrites) buffer write(s)")
         }
-        // Measured off the frames that reached the wav, divided by the rate the audio
-        // actually arrived at. Both halves matter: a rate the engine merely claimed is a
-        // fiction on the device this ticket is about, and frames that were delivered but
-        // never written are not in the audio the pipeline is about to transcribe. With no
-        // audio there is no rate, and the duration is honestly zero.
-        let duration =
-            snapshot.sampleRate > 0 ? Double(snapshot.writtenFrames) / snapshot.sampleRate : 0
         let url =
             wavURL
             ?? FileManager.default.temporaryDirectory
@@ -207,7 +200,7 @@ import os
 
         energyDump.write(snapshot.windowEnergies)
         return RecordingCapture(
-            wav: url, duration: duration, frames: Int(snapshot.frames),
+            wav: url, duration: snapshot.duration, frames: Int(snapshot.frames),
             windowEnergies: snapshot.windowEnergies, engineRestarts: restarts,
             deviceName: deviceName)
     }
@@ -219,9 +212,8 @@ import os
     /// the next tick rebuilds.
     ///
     /// The format is read off the input node and handed to `installTap` with nothing in
-    /// between (#55). It is not read for anything else — not for the wav, not for the
-    /// window size, not for the duration — because it is what the engine *resolved*, and
-    /// on the device this ticket is about that number is a fiction.
+    /// between (#55). It is not read for anything else: every buffer is converted from its
+    /// own format by `CaptureState`.
     private func openEngine() {
         guard let state else { return }
         let engine = AVAudioEngine()
@@ -361,7 +353,7 @@ import os
             """)
         teardownEngine()
         openEngine()
-        // The fresh engine gets its own stall window, counted from now.
+        // The fresh engine gets its own stall window, counted from the open returning.
         progress.lastProgressAt = CACurrentMediaTime()
     }
 }

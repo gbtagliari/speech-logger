@@ -16,7 +16,7 @@ The app invokes external binaries as subprocesses rather than linking libraries 
 
 - **`mlx_whisper`** for transcription (`whisper-large-v3-turbo`, `--language pt`,
   `--condition-on-previous-text False`).
-- **`ffmpeg`** for audio encode (native wav → mp3). It is a **third** required binary: `mlx_whisper`
+- **`ffmpeg`** for audio encode (capture wav → mp3). It is a **third** required binary: `mlx_whisper`
   itself shells out to `ffmpeg` to decode audio, and the app also calls it directly to produce the
   retained mp3.
 - **`claude`** for both LLM passes (`--print --model claude-sonnet-5 --effort low
@@ -45,3 +45,16 @@ Two hard constraints, both verified and both non-negotiable:
 - Full contracts: [`docs/research/mlx-whisper-shell-out-contract.md`](../research/mlx-whisper-shell-out-contract.md)
   and [`docs/research/claude-cli-shell-out-contract.md`](../research/claude-cli-shell-out-contract.md).
 </content>
+
+## Amendment (2026-10-05, #69): the app normalizes the capture format
+
+The app no longer records native and leaves all resampling to `ffmpeg`. It converts every capture
+buffer to **16 kHz mono Float32** at the audio tap (`CaptureState`), and the wav is written in that
+format. Reason, measured on macOS 27: a Bluetooth headset changes sample rate *inside* one capture
+(44.1 kHz, then 16 kHz once the HFP link settles), and `AVAudioFile` accepts a buffer that differs
+only in rate, so a wav opened at the first rate played back 2.75x too fast with no write error.
+No single device format describes a capture, so the capture has to own its format.
+
+The `ffmpeg` encode contract (mono, 16 kHz, 64 kbps mp3) is unchanged and stays the format contract
+for the stored `audio.mp3`; its resample is now a no-op on this input. Do not reintroduce
+"record native": a device format is not a constant of a capture.
