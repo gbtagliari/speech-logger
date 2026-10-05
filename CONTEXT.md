@@ -102,7 +102,8 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   - `mlx_whisper` — local transcription (`whisper-large-v3-turbo`, `--language pt`). Exits 0 even
     on failure; success = output file exists and is non-empty.
   - `ffmpeg` — audio encode (capture wav → mp3). Also invoked internally by `mlx_whisper` to decode.
-    The capture wav is already 16 kHz mono: the tap converts every buffer to it (ADR-0002 amendment, #69).
+    The capture wav is already 16 kHz mono: the tap converts every buffer to it (ADR-0002
+    amendment, #69).
   - `claude` — the Claude Code CLI, run once per pass. Gated on `is_error`, not exit code alone.
 
 - **Preflight** — the launch-time gate that checks the three binaries are present, `claude` is
@@ -185,7 +186,8 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   never gets a chance, and the app terminates mid-gesture with whatever the user was about to say.
   Closed on two fronts. The format is read off the input node and handed straight to the install
   with nothing in between, so no window exists for it to go stale in (the format is not used for
-  anything else: each buffer is converted from its own format to the capture's, #69). What is left crosses Objective-C through
+  anything else: each buffer is converted from its own format to the capture's, #69). What is left
+  crosses Objective-C through
   `ObjCExceptionBridge` — the only Objective-C in the project, and the only place allowed to
   `@try` — so a raise arrives as an error instead of ending the process. Since #63 it does not even
   fail the recording: a raise fails that *attempt*, and the next

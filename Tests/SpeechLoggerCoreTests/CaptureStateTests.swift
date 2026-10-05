@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 import Testing
 
-@testable import SpeechLoggerCore
+import SpeechLoggerCore
 
 /// The capture accumulator (#69): whatever format the device delivers, and however often it
 /// changes it mid-capture, the wav, the duration and the energy windows are in one fixed
@@ -31,10 +31,7 @@ struct CaptureStateTests {
 
     @Test("the tone's pitch survives the switch, so the audio is not sped up")
     func formatSwitchPreservesPitch() throws {
-        let capture = try Capture.recorded([
-            .sine(rate: 44_100, channels: 2, frequency: 440, seconds: 1.0),
-            .sine(rate: 16_000, channels: 1, frequency: 440, seconds: 1.0),
-        ])
+        let capture = try Capture.recorded(Tone.headsetSwitch)
 
         // A 440 Hz sine crosses zero 880 times a second. Played 2.75x fast it would read
         // ~2420, so a tolerance of a few percent separates the two outright.
@@ -43,14 +40,21 @@ struct CaptureStateTests {
     }
 
     @Test("the energy windows span 20 ms on both sides of the switch")
-    func windowsFollowTheFixedFormat() throws {
-        let capture = try Capture.recorded([
-            .sine(rate: 44_100, channels: 2, frequency: 440, seconds: 1.0),
-            .sine(rate: 16_000, channels: 1, frequency: 440, seconds: 1.0),
-        ])
+    func windowsFollowTheFixedFormat() {
+        let wav = FileManager.default.temporaryDirectory
+            .appendingPathComponent("capture-state-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: wav) }
+        let state = CaptureState(wav: wav)
+        let perSecond = 1 / Self.window
+        var counts: [Int] = []
+        for tone in Tone.headsetSwitch {
+            for buffer in tone.buffers { state.append(buffer) }
+            counts.append(state.snapshot.windowEnergies.count)
+        }
 
-        let expected = 2.0 / Self.window
-        #expect(abs(Double(capture.snapshot.windowEnergies.count) - expected) <= 2)
+        // One second per segment: each side closes ~50 windows, whatever rate it arrived at.
+        #expect(abs(Double(counts[0]) - perSecond) <= 2, "before the switch: \(counts[0])")
+        #expect(abs(Double(counts[1] - counts[0]) - perSecond) <= 2, "after: \(counts[1] - counts[0])")
     }
 
     @Test("the snapshot's duration is the wav's length")
@@ -68,12 +72,9 @@ struct CaptureStateTests {
 
     @Test("frames count what the device delivered, at the device's own rate")
     func framesCountDeliveredFrames() throws {
-        let capture = try Capture.recorded([
-            .sine(rate: 44_100, channels: 2, frequency: 440, seconds: 1.0),
-            .sine(rate: 16_000, channels: 1, frequency: 440, seconds: 1.0),
-        ])
+        let capture = try Capture.recorded(Tone.headsetSwitch)
 
-        #expect(capture.snapshot.frames == 44_100 + 16_000)
+        #expect(capture.snapshot.deliveredFrames == 44_100 + 16_000)
     }
 
     @Test("a loud stereo channel and a dead one still measure as sound after the downmix")
@@ -92,11 +93,11 @@ struct CaptureStateTests {
     func noBuffersIsEmpty() throws {
         let capture = try Capture.recorded([])
 
-        #expect(capture.snapshot.frames == 0)
+        #expect(capture.snapshot.deliveredFrames == 0)
         #expect(capture.snapshot.writtenFrames == 0)
         #expect(capture.snapshot.windowEnergies.isEmpty)
         #expect(capture.snapshot.duration == 0)
-        #expect(capture.snapshot.droppedWrites == 0)
+        #expect(capture.snapshot.droppedBuffers == 0)
     }
 
     // MARK: - The wav cannot be opened
@@ -111,10 +112,10 @@ struct CaptureStateTests {
         let snapshot = state.snapshot
 
         #expect(snapshot.openFailure != nil)
-        #expect(snapshot.droppedWrites > 0)
+        #expect(snapshot.droppedBuffers > 0)
         #expect(snapshot.writtenFrames == 0)
         #expect(snapshot.duration == 0)
-        #expect(snapshot.frames == 8_000)
+        #expect(snapshot.deliveredFrames == 8_000)
         // The energy still measures: the guard judges it like any other capture.
         #expect(!snapshot.windowEnergies.isEmpty)
     }
@@ -125,6 +126,14 @@ struct CaptureStateTests {
 /// A synthetic device run: one format, delivered in tap-sized buffers.
 private struct Tone {
     let buffers: [AVAudioPCMBuffer]
+
+    /// The #69 device: a second at 44.1 kHz stereo, then a second at the HFP link's 16 kHz mono.
+    static var headsetSwitch: [Tone] {
+        [
+            .sine(rate: 44_100, channels: 2, frequency: 440, seconds: 1.0),
+            .sine(rate: 16_000, channels: 1, frequency: 440, seconds: 1.0),
+        ]
+    }
 
     static func sine(
         rate: Double, channels: AVAudioChannelCount, frequency: Double, seconds: Double,

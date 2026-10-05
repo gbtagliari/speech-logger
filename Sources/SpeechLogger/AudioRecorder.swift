@@ -182,10 +182,13 @@ import os
             // thread, so it kept the reason and this is where it gets said.
             log.error("the capture wav could not be opened: \(openFailure, privacy: .public)")
         }
-        if snapshot.droppedWrites > 0 {
+        if let conversionFailure = snapshot.conversionFailure {
+            log.error("a capture buffer could not be converted: \(conversionFailure, privacy: .public)")
+        }
+        if snapshot.droppedBuffers > 0 {
             // The energy measurements still hold, but the retained wav is missing frames
             // — record it rather than swallow it.
-            log.warning("audio capture dropped \(snapshot.droppedWrites) buffer write(s)")
+            log.warning("audio capture dropped \(snapshot.droppedBuffers) buffer(s)")
         }
         let url =
             wavURL
@@ -200,7 +203,7 @@ import os
 
         energyDump.write(snapshot.windowEnergies)
         return RecordingCapture(
-            wav: url, duration: snapshot.duration, frames: Int(snapshot.frames),
+            wav: url, duration: snapshot.duration, frames: Int(snapshot.deliveredFrames),
             windowEnergies: snapshot.windowEnergies, engineRestarts: restarts,
             deviceName: deviceName)
     }

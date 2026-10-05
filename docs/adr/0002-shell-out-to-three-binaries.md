@@ -44,7 +44,6 @@ Two hard constraints, both verified and both non-negotiable:
   gate on `is_error`. Neither has a built-in timeout (a dead network makes `claude` hang ~179 s/try).
 - Full contracts: [`docs/research/mlx-whisper-shell-out-contract.md`](../research/mlx-whisper-shell-out-contract.md)
   and [`docs/research/claude-cli-shell-out-contract.md`](../research/claude-cli-shell-out-contract.md).
-</content>
 
 ## Amendment (2026-10-05, #69): the app normalizes the capture format
 

@@ -49,6 +49,11 @@ public final class CaptureState: @unchecked Sendable {
     private let openFailure: String?
     /// Built for the format the device is delivering now; rebuilt when that changes.
     private var converter: AVAudioConverter?
+    /// A format no converter could be built for, so its buffers are dropped without retrying
+    /// the build (and allocating) on every one of them.
+    private var unconvertible: AVAudioFormat?
+    /// The first reason a buffer could not be converted. Kept like `openFailure`.
+    private var conversionFailure: String?
     /// The converter's output, reused across buffers so the steady state does not allocate
     /// on the audio thread. Replaced only when an input needs more room.
     private var converted: AVAudioPCMBuffer?
@@ -58,11 +63,11 @@ public final class CaptureState: @unchecked Sendable {
     private var windowFilled = 0
     /// Frames the device *delivered*, at its own rate. The dead-capture axis reads this:
     /// zero means the tap was never called, whatever happened afterwards (#54).
-    private var frames: AVAudioFrameCount = 0
+    private var deliveredFrames: AVAudioFrameCount = 0
     /// Converted frames that reached the wav, in `format`. The duration is measured from
     /// this, since it describes the audio the pipeline will transcribe.
     private var writtenFrames: AVAudioFrameCount = 0
-    private var droppedWrites = 0
+    private var droppedBuffers = 0
 
     public init(wav: URL) {
         do {
@@ -87,7 +92,7 @@ public final class CaptureState: @unchecked Sendable {
     public var frameCount: AVAudioFrameCount {
         lock.lock()
         defer { lock.unlock() }
-        return frames
+        return deliveredFrames
     }
 
     /// One buffer, from the audio thread: converted, measured, written.
@@ -95,11 +100,11 @@ public final class CaptureState: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        frames += buffer.frameLength
+        deliveredFrames += buffer.frameLength
         guard let converter = converter(for: buffer) else {
             // A format no converter takes (not seen in practice): the buffer is lost, and
             // counted so it is reported rather than silently swallowed.
-            droppedWrites += 1
+            droppedBuffers += 1
             return
         }
         convert(buffer, with: converter)
@@ -110,12 +115,11 @@ public final class CaptureState: @unchecked Sendable {
     public var snapshot: CaptureSnapshot {
         lock.lock()
         defer { lock.unlock() }
-        let trailing =
-            windowFilled > 0 ? [(windowSquares / Float(windowFilled)).squareRoot()] : []
+        let trailing = windowFilled > 0 ? [windowRMS] : []
         return CaptureSnapshot(
-            windowEnergies: windowEnergies + trailing, frames: frames,
-            writtenFrames: writtenFrames, droppedWrites: droppedWrites,
-            openFailure: openFailure)
+            windowEnergies: windowEnergies + trailing, deliveredFrames: deliveredFrames,
+            writtenFrames: writtenFrames, droppedBuffers: droppedBuffers,
+            openFailure: openFailure, conversionFailure: conversionFailure)
     }
 
     // MARK: - Conversion. Called with `lock` held.
@@ -125,14 +129,19 @@ public final class CaptureState: @unchecked Sendable {
     /// at most the resampler's few milliseconds of latency rather than its whole history.
     private func converter(for buffer: AVAudioPCMBuffer) -> AVAudioConverter? {
         if let converter, converter.inputFormat == buffer.format { return converter }
+        if unconvertible == buffer.format { return nil }
         if let converter { drain(converter) }
         converter = AVAudioConverter(from: buffer.format, to: Self.format)
+        if converter == nil {
+            unconvertible = buffer.format
+            conversionFailure = conversionFailure ?? "no converter from \(buffer.format)"
+        }
         return converter
     }
 
     private func convert(_ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter) {
         guard let output = outputBuffer(forInput: buffer) else {
-            droppedWrites += 1
+            droppedBuffers += 1
             return
         }
         var delivered = false
@@ -168,7 +177,8 @@ public final class CaptureState: @unchecked Sendable {
             var error: NSError?
             let status = converter.convert(to: output, error: &error, withInputFrom: input)
             if status == .error {
-                droppedWrites += 1
+                droppedBuffers += 1
+                conversionFailure = conversionFailure ?? error.map(String.init(describing:))
                 return
             }
             if output.frameLength > 0 { consume(output) }
@@ -189,7 +199,6 @@ public final class CaptureState: @unchecked Sendable {
         return converted
     }
 
-    /// Measure and write one converted chunk.
     private func consume(_ chunk: AVAudioPCMBuffer) {
         accumulate(chunk)
         // Cannot throw off the real-time tap; a lost write is counted so it is reported. A
@@ -198,7 +207,7 @@ public final class CaptureState: @unchecked Sendable {
         if didWrite {
             writtenFrames += chunk.frameLength
         } else {
-            droppedWrites += 1
+            droppedBuffers += 1
         }
     }
 
@@ -213,29 +222,33 @@ public final class CaptureState: @unchecked Sendable {
             windowSquares += sample * sample
             windowFilled += 1
             if windowFilled >= Self.windowFrames {
-                windowEnergies.append((windowSquares / Float(windowFilled)).squareRoot())
+                windowEnergies.append(windowRMS)
                 windowSquares = 0
                 windowFilled = 0
             }
         }
     }
+
+    private var windowRMS: Float { (windowSquares / Float(windowFilled)).squareRoot() }
 }
 
 /// What a finished capture measured, read off the main actor once the tap is gone.
 ///
-/// The two frame counts are not redundant and are not in the same unit. `frames` is what the
-/// *device delivered*, at whatever rate it ran, and is the dead-capture axis (#54): zero means
-/// the tap was never called. `writtenFrames` is what reached the wav, in
-/// `CaptureState.format`, and is what the duration is measured from.
+/// The two frame counts are not in the same unit. `deliveredFrames` is what the device
+/// delivered, at whatever rate it ran, and is the dead-capture axis (#54): zero means the tap
+/// was never called. `writtenFrames` is what reached the wav, in `CaptureState.format`, and is
+/// what the duration is measured from.
 public struct CaptureSnapshot: Sendable {
     public let windowEnergies: [Float]
-    public let frames: AVAudioFrameCount
+    public let deliveredFrames: AVAudioFrameCount
     public let writtenFrames: AVAudioFrameCount
-    public let droppedWrites: Int
+    /// Buffers (or converted chunks) that never reached the wav, whatever stopped them.
+    public let droppedBuffers: Int
     /// Why the wav could never be opened, if it could not.
     public let openFailure: String?
+    /// Why a buffer could not be converted, the first time one could not.
+    public let conversionFailure: String?
 
-    /// The length of the audio in the wav.
     public var duration: TimeInterval {
         Double(writtenFrames) / CaptureState.format.sampleRate
     }
@@ -243,5 +256,6 @@ public struct CaptureSnapshot: Sendable {
     /// The empty measurement, for a `stop` with no capture behind it. Not named `none`: at
     /// the `??` that reads it, that spelling collides with `Optional.none`.
     public static let empty = CaptureSnapshot(
-        windowEnergies: [], frames: 0, writtenFrames: 0, droppedWrites: 0, openFailure: nil)
+        windowEnergies: [], deliveredFrames: 0, writtenFrames: 0, droppedBuffers: 0,
+        openFailure: nil, conversionFailure: nil)
 }
