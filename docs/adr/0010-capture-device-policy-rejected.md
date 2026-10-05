@@ -41,3 +41,17 @@ Measured on macOS 27.0, soundcore Life Q30, `AVAudioEngine` input bound with
 - Avoiding the headset needs a capture path that never opens the default input: a Core Audio HAL
   unit (AUHAL) or an `AVCaptureSession` bound to the built-in device from creation. Either is a new
   spec, not a tweak to this one, and must clear the same probe before it is built.
+
+## Follow-up (2026-10-05): AUHAL clears the probe
+
+`capture-device-probe --auhal` captures through a HAL output unit (`kAudioUnitSubType_HALOutput`,
+input enabled, output disabled) set to the built-in mic before `AudioUnitInitialize`, so the
+default input is never opened. Same machine and headset, idle in A2DP, 5 of 5 runs:
+
+- (a) first frame 0.054–0.064 s (48 kHz mono, ~145k frames in 3 s, no render errors).
+- (b) the headset's output stayed at 44.1 kHz and its input never ran. The unbound control, run
+  right after, still switched it to 16 kHz HFP.
+- (c) there is no `installTap`, so the #55 `NSException` cannot occur.
+
+The policy is viable on an AUHAL capture path. Building it means replacing the recorder's
+`AVAudioEngine` and is a new spec.
