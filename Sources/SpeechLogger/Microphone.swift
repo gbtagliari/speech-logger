@@ -6,10 +6,10 @@ import SpeechLoggerCore
 /// The microphone as the device reports it: the grant, the presence of an input, and
 /// whether that input is muted or at zero gain (#45).
 ///
-/// Three sources, in the order a recording would hit them: TCC, then AVFoundation for
-/// the device, then CoreAudio for mute and volume — the last two are not exposed by
-/// AVFoundation at all. `SpeechLoggerCore` takes the answer as a value, so preflight
-/// and `RecordingCoordinator` stay testable without hardware.
+/// Two sources, in the order a recording would hit them: TCC, then CoreAudio for the
+/// device the capture will record from and its mute and volume. `SpeechLoggerCore` takes
+/// the answer as a value, so preflight and `RecordingCoordinator` stay testable without
+/// hardware.
 ///
 /// **Every unknown reads as usable.** A device that does not implement the mute or
 /// volume property is common (many USB mics, AirPods), and the cost of the two errors
@@ -18,7 +18,7 @@ import SpeechLoggerCore
 /// empty — the state of the world before this check existed.
 enum Microphone {
     /// Query the device now. Cheap enough for the main actor and for the start of every
-    /// recording: a TCC read, a device lookup, and two CoreAudio property reads.
+    /// recording: a TCC read, a device enumeration, and two CoreAudio property reads.
     static var state: MicrophoneState {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
@@ -35,48 +35,12 @@ enum Microphone {
             break
         }
 
-        // Two answers to "is there a mic", and they can disagree: AVFoundation
-        // enumerates capture devices, while `AVAudioEngine`'s input node follows the
-        // *default input device*, which is the one CoreAudio names. Only agreement that
-        // there is nothing counts as nothing — a disagreement is an unknown, and an
-        // unknown reads as usable rather than refusing a recording that might work.
-        let captureDevice = AVCaptureDevice.default(for: .audio)
-        let inputDevice = defaultInputDevice
-        guard captureDevice != nil || inputDevice != nil else { return .noDevice }
-
-        // Mute and gain are knowable only through CoreAudio. With no default input
-        // device to ask, they stay unknown, which is again read as usable.
-        guard let inputDevice else { return .usable }
-        if isMuted(inputDevice) || isGainless(inputDevice) { return .silenced }
+        // The device the capture will record from, not the system default (#75): a muted
+        // headset mic must not block a recording made from the built-in mic.
+        guard let device = InputDevices.resolve().choice?.device else { return .noDevice }
+        let id = AudioDeviceID(device.id)
+        if isMuted(id) || isGainless(id) { return .silenced }
         return .usable
-    }
-
-    /// The default input device's own name ("soundcore Life Q30"), or nil when there is
-    /// no device or it does not publish one.
-    ///
-    /// Read for one purpose: a recording-stage failure the user can act on (#63). When
-    /// the engine could not get the device to deliver, "the microphone delivered no
-    /// audio" sends them looking, while naming the headset tells them which one to take
-    /// off. It informs no decision, so an absent name costs nothing.
-    ///
-    /// Global scope, because the name belongs to the device rather than to a stream, and
-    /// `Unmanaged` because this property answers with a `CFString` the caller owns —
-    /// `takeRetainedValue` is what consumes that +1.
-    static var defaultInputDeviceName: String? {
-        guard let device = defaultInputDevice else { return nil }
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioObjectPropertyName,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        guard AudioObjectHasProperty(device, &address) else { return nil }
-        var name: Unmanaged<CFString>?
-        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        let status = withUnsafeMutablePointer(to: &name) {
-            AudioObjectGetPropertyData(device, &address, 0, nil, &size, $0)
-        }
-        guard status == noErr, let name else { return nil }
-        let string = name.takeRetainedValue() as String
-        return string.isEmpty ? nil : string
     }
 
     /// Open System Settings straight to the Microphone privacy pane. The anchored
@@ -101,20 +65,6 @@ enum Microphone {
     }
 
     // MARK: - CoreAudio
-
-    /// The system's current default input device, or nil when there is none.
-    private static var defaultInputDevice: AudioDeviceID? {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var device = AudioDeviceID(kAudioObjectUnknown)
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        let status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device)
-        guard status == noErr, device != AudioDeviceID(kAudioObjectUnknown) else { return nil }
-        return device
-    }
 
     /// The input is muted. A device with no mute property is not muted.
     private static func isMuted(_ device: AudioDeviceID) -> Bool {

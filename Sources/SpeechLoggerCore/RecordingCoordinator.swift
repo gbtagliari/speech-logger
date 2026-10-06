@@ -1,6 +1,6 @@
 import Foundation
 
-/// The microphone capture seam. The concrete implementation (AVAudioEngine) lives
+/// The microphone capture seam. The concrete implementation (a HAL capture unit) lives
 /// in the app target; the coordinator depends only on this so its orchestration is
 /// testable without hardware.
 @MainActor public protocol AudioRecording: AnyObject {
@@ -9,7 +9,7 @@ import Foundation
     ///
     /// It does **not** promise audio: opening the mic and receiving audio are separate
     /// events, and on a Bluetooth headset the second one lands 1.0–1.6 s after the first
-    /// (#63). The recorder keeps rebuilding its engine in between; `onAudioFlowing` is
+    /// (#63). The recorder keeps rebuilding its capture unit in between; `onAudioFlowing` is
     /// how the caller learns it worked.
     func start() throws
     /// Stop capture and return the recorded file plus its measurements.
