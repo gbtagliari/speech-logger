@@ -60,6 +60,11 @@ new format.
 - **Bluetooth-bound fallback** (3 of 3 runs): first frame 0.100–0.147 s, 16 kHz mono, 0 rebuilds,
   0 render errors. Measured with the headset already in HFP (another process held its input); the
   cold A2DP → HFP case is in the manual matrix.
+- **Bluetooth-bound fallback, headset idle in A2DP** (3 of 3 runs, 5 s each): first frame
+  0.097–0.114 s, 75–80k frames at 16 kHz (4.7–5.0 s), 0 rebuilds, 0 render errors. The output
+  switched to 16 kHz HFP, as it must. Two seconds after the last run the output still read 16 kHz
+  with its input idle; whether it returns to A2DP is a manual-matrix row. The probe counts frames,
+  not energy, so whether the first frames carry speech or warm-up zeros is not measured here.
 - **Built-in mic, headset disconnected mid-run** (20 s, disconnected at ~7 s): the unit never
   noticed. 954,880 frames (19.9 s at 48 kHz), 0 rebuilds, 0 render errors. Until the disconnect the
   headset stayed at 44.1 kHz with its input idle, while music played (its output started running
@@ -80,5 +85,4 @@ new format.
   out of scope.
 - Still to verify by hand: the whole manual matrix in #75 (Bluetooth default with music, cold
   Bluetooth-only fallback, USB default, built-in only, headset disconnected mid-braindump, built-in
-  muted, headset muted, A2DP at stop), and the Bluetooth-bound fallback with the headset idle
-  (`--watched --device headset`, measuring the cold A2DP → HFP cost).
+  muted, headset muted, A2DP at stop).
