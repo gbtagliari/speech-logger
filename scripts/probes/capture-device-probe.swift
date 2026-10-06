@@ -4,9 +4,14 @@
 //
 //   swiftc -O scripts/probes/capture-device-probe.swift -o /tmp/capture-device-probe
 //   /tmp/capture-device-probe [--control] [--runs N]
+//   /tmp/capture-device-probe --watched [--device headset|builtin] [--seconds N] [--rate-change-at T]
 //
 // `--auhal` captures through a HAL output unit set to the built-in mic before it is initialized,
-// never opening the default input. `--control` leaves the engine on the system default input, to show the HFP switch the
+// never opening the default input. `--watched` (#75) runs the same unit under the app's watchdog
+// policy (0.4 s opening stall, 1.0 s flowing stall, 10 rebuilds), bound to the headset or the
+// built-in mic, for `--seconds`; `--rate-change-at T` flips the bound device's nominal rate T s in
+// and restores it at the end. Disconnecting the headset by hand during a long run covers the
+// disconnect case. `--control` leaves the engine on the system default input, to show the HFP switch the
 // measurement is meant to catch. `TAP=hw|nil` installs the tap at the node's input format or with
 // no format instead of its output format. Needs the microphone grant for the terminal running it.
 // Results and the rejection they led to: docs/adr/0010-capture-device-policy-rejected.md.
@@ -267,12 +272,148 @@ func runHAL(device: AudioDeviceID, headset: String, seconds: Double) -> RunResul
         headsetSamples: samples)
 }
 
+// MARK: - One watched run, AUHAL (#75)
+
+/// The open half of `runHAL`, returning the running unit and its capture, or nil.
+func openHAL(device: AudioDeviceID) -> (AudioUnit, HALCapture, Unmanaged<HALCapture>)? {
+    var description = AudioComponentDescription(
+        componentType: kAudioUnitType_Output, componentSubType: kAudioUnitSubType_HALOutput,
+        componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0)
+    guard let component = AudioComponentFindNext(nil, &description) else { return nil }
+    var maybeUnit: AudioUnit?
+    guard check(AudioComponentInstanceNew(component, &maybeUnit), "instance"), let unit = maybeUnit else { return nil }
+    var on: UInt32 = 1, off: UInt32 = 0
+    let size32 = UInt32(MemoryLayout<UInt32>.size)
+    var id = device
+    var hardware = AudioStreamBasicDescription()
+    var asbdSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+    guard check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &on, size32), "enable input"),
+          check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &off, size32), "disable output"),
+          check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &id,
+                                     UInt32(MemoryLayout<AudioDeviceID>.size)), "current device"),
+          check(AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 1, &hardware, &asbdSize), "device format")
+    else { AudioComponentInstanceDispose(unit); return nil }
+    let channels = max(1, hardware.mChannelsPerFrame)
+    var client = AudioStreamBasicDescription(
+        mSampleRate: hardware.mSampleRate, mFormatID: kAudioFormatLinearPCM,
+        mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsNonInterleaved,
+        mBytesPerPacket: 4, mFramesPerPacket: 1, mBytesPerFrame: 4, mChannelsPerFrame: channels,
+        mBitsPerChannel: 32, mReserved: 0)
+    let capture = HALCapture(unit: unit, channels: channels)
+    let refCon = Unmanaged.passRetained(capture)
+    var callback = AURenderCallbackStruct(inputProc: halInputCallback, inputProcRefCon: refCon.toOpaque())
+    guard check(AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 1, &client, asbdSize), "client format"),
+          check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_SetInputCallback, kAudioUnitScope_Global, 0, &callback,
+                                     UInt32(MemoryLayout<AURenderCallbackStruct>.size)), "input callback"),
+          check(AudioUnitInitialize(unit), "initialize"),
+          check(AudioOutputUnitStart(unit), "start")
+    else { AudioComponentInstanceDispose(unit); refCon.release(); return nil }
+    print(String(format: "  open: %d Hz/%d ch", Int(hardware.mSampleRate), channels))
+    return (unit, capture, refCon)
+}
+
+func isRunning(_ unit: AudioUnit) -> Bool {
+    var running: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+    return AudioUnitGetProperty(unit, kAudioOutputUnitProperty_IsRunning, kAudioUnitScope_Global, 0, &running, &size) == noErr
+        && running != 0
+}
+
+func setNominalRate(_ device: AudioDeviceID, _ rate: Float64) -> Bool {
+    var addr = address(kAudioDevicePropertyNominalSampleRate)
+    var value = rate
+    return check(AudioObjectSetPropertyData(device, &addr, 0, nil, UInt32(MemoryLayout<Float64>.size), &value),
+                 "set nominal rate \(Int(rate))")
+}
+
+/// A rate the device supports other than its current one, for the rate-change case.
+func alternateRate(_ device: AudioDeviceID) -> Float64? {
+    var addr = address(kAudioDevicePropertyAvailableNominalSampleRates)
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(device, &addr, 0, nil, &size) == noErr else { return nil }
+    var ranges = [AudioValueRange](repeating: AudioValueRange(), count: Int(size) / MemoryLayout<AudioValueRange>.size)
+    guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &ranges) == noErr else { return nil }
+    let current = scalar(device, kAudioDevicePropertyNominalSampleRate, Float64(0)) ?? 0
+    return ranges.map(\.mMinimum).first { $0 != current }
+}
+
+/// The app's capture loop in miniature: a 50 ms tick, the two watchdog signals (unit running,
+/// frames advancing), immediate rebuilds on the same device, bounded at 10.
+func runWatched(device: AudioDeviceID, headset: String, seconds: Double, rateChangeAt: Double?) {
+    let openingStall = 0.4, flowingStall = 1.0, restartLimit = 10
+    let t0 = CACurrentMediaTime()
+    var current = openHAL(device: device)
+    var lastProgress = CACurrentMediaTime()
+    var framesBefore: UInt64 = 0, framesInUnit: UInt64 = 0, firstFrame: Double?
+    var restarts = 0, renderErrors = 0, gaveUp = false
+    let originalRate = scalar(device, kAudioDevicePropertyNominalSampleRate, Float64(0))
+    var rateChanged = false
+    var nextSample = t0 + 0.5
+
+    func dispose() {
+        guard let (unit, capture, refCon) = current else { return }
+        AudioOutputUnitStop(unit)
+        AudioUnitUninitialize(unit)
+        AudioComponentInstanceDispose(unit)
+        capture.lock.lock(); renderErrors += capture.renderErrors; capture.lock.unlock()
+        refCon.release()
+        framesBefore += framesInUnit
+        framesInUnit = 0
+        current = nil
+    }
+
+    while CACurrentMediaTime() - t0 < seconds {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        let now = CACurrentMediaTime()
+        if let at = rateChangeAt, !rateChanged, now - t0 >= at, let rate = alternateRate(device) {
+            rateChanged = true
+            print(String(format: "  %.2f s: nominal rate -> %d Hz", now - t0, Int(rate)))
+            _ = setNominalRate(device, rate)
+        }
+        var running = false
+        if let (unit, capture, _) = current {
+            running = isRunning(unit)
+            capture.lock.lock(); let frames = capture.frames; capture.lock.unlock()
+            if frames > framesInUnit {
+                framesInUnit = frames
+                lastProgress = now
+                if firstFrame == nil { firstFrame = now - t0 }
+            }
+        }
+        let stall = firstFrame == nil ? openingStall : flowingStall
+        if !running || now - lastProgress > stall {
+            if restarts < restartLimit {
+                restarts += 1
+                print(String(format: "  %.2f s: rebuild %d (running %d)", now - t0, restarts, running ? 1 : 0))
+                dispose()
+                current = openHAL(device: device)
+                lastProgress = CACurrentMediaTime()
+            } else if !gaveUp {
+                gaveUp = true
+                print(String(format: "  %.2f s: gave up after %d rebuilds", now - t0, restarts))
+            }
+        }
+        if now >= nextSample {
+            nextSample += 0.5
+            print(String(format: "  %.1f s headset: %@", now - t0, headsetLine(devices(), named: headset)))
+        }
+    }
+    dispose()
+    if rateChanged, let originalRate { _ = setNominalRate(device, originalRate) }
+    let first = firstFrame.map { String(format: "%.3f s", $0) } ?? "never"
+    print("watched: first frame \(first), \(framesBefore) frames, \(restarts) rebuilds, \(renderErrors) render errors, gave up \(gaveUp)")
+}
+
 // MARK: - Main
 
 let arguments = CommandLine.arguments
 let control = arguments.contains("--control")
 let hal = arguments.contains("--auhal")
 let runs = arguments.firstIndex(of: "--runs").flatMap { Int(arguments[$0 + 1]) } ?? 5
+let watched = arguments.contains("--watched")
+let watchedDevice = arguments.firstIndex(of: "--device").map { arguments[$0 + 1] } ?? "builtin"
+let seconds = arguments.firstIndex(of: "--seconds").flatMap { Double(arguments[$0 + 1]) } ?? 3
+let rateChangeAt = arguments.firstIndex(of: "--rate-change-at").flatMap { Double(arguments[$0 + 1]) }
 
 print("mic grant: \(AVCaptureDevice.authorizationStatus(for: .audio).rawValue) (3 = authorized)")
 let all = devices()
@@ -292,6 +433,18 @@ guard let builtIn = all.first(where: { $0.hasInput && $0.transport == kAudioDevi
     print("no built-in input"); exit(1)
 }
 let headset = defaultInputDevice.name
+if watched {
+    let target = watchedDevice == "headset" ? defaultInputDevice : builtIn
+    print("mode: WATCHED AUHAL on \(target.name) for \(seconds) s")
+    print("headset before: \(headsetLine(all, named: headset))")
+    for index in 1...runs {
+        print("run \(index):")
+        runWatched(device: target.id, headset: headset, seconds: seconds, rateChangeAt: rateChangeAt)
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+    }
+    print("headset after: \(headsetLine(devices(), named: headset))")
+    exit(0)
+}
 print("mode: \(control ? "CONTROL (system default input)" : hal ? "AUHAL on \(builtIn.name)" : "engine bound to \(builtIn.name)")")
 print("headset before: \(headsetLine(all, named: headset))")
 
