@@ -142,9 +142,8 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
 
 - <a id="engine-restart"></a>**Engine restart** — the recorder throwing its capture unit away
   mid-capture and building a fresh one on the same device, **immediately**, because the unit stopped
-  under the capture or stayed running while frames stopped arriving (#63). The "engine" was an
-  `AVAudioEngine` until #75 and is now a HAL capture unit (ADR-0011); the name and
-  `RecordingCapture.engineRestarts` stay, so stored items and the guard are untouched. It is the app's whole recovery for
+  under the capture or stayed running while frames stopped arriving (#63). The "engine" is the
+  HAL capture unit (ADR-0011). It is the app's whole recovery for
   an audio device that will not stay bound, and it is *mitigation, not a cure*: measured on a
   Bluetooth headset it settles most of the time and sometimes never does.
   - **Two signals, both needed.** The unit's running state catches a unit that stopped; a stall in

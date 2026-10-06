@@ -23,6 +23,8 @@ attempt, input enabled and output disabled, its current device set before initia
 client format is Float32 non-interleaved at the device's own rate and channel count (the AUHAL does
 not resample input). The input callback renders into a buffer preallocated at open and hands it,
 uncopied, to the unchanged capture accumulator (`CaptureState`), which converts to 16 kHz mono.
+The callback itself does not allocate; the accumulator still does on a format change (a new
+converter), as it did under the tap.
 The unit is disposed at `stop` and at every rebuild, so between captures no device is held.
 
 **A capture device policy picks the device** (`CaptureDevicePolicy`, a pure value):
@@ -41,7 +43,8 @@ The unit is disposed at `stop` and at every rebuild, so between captures no devi
   rebuild within a capture binds the same chosen device.
 - **The system default input is never changed**, so other apps keep the input the user chose.
 - The microphone checks (presence, mute, zero volume) and the device named on a failed capture
-  refer to the **chosen** device. Each capture logs the chosen device, the default input and the
+  refer to the **chosen** device. `noDevice` now means "no Core Audio default input" alone; the
+  `AVCaptureDevice` cross-check is gone, since an AUHAL has nothing to bind without a device. Each capture logs the chosen device, the default input and the
   reason.
 
 **The watchdog (`CaptureWatchdog`, #63) is reused as is.** Its two signals are now the unit's
@@ -70,5 +73,7 @@ new format.
   stored items and the guard are untouched; the "engine" is now the capture unit.
 - The unit is opened on the main actor, as the engine was. Pre-warming and an off-main open are
   out of scope.
-- Still to verify by hand (manual matrix in #75): the cold Bluetooth-only fallback latency, a
-  headset disconnected mid-braindump, and the headset returning to A2DP at stop.
+- Still to verify by hand: the whole manual matrix in #75 (Bluetooth default with music, cold
+  Bluetooth-only fallback, USB default, built-in only, headset disconnected mid-braindump, built-in
+  muted, headset muted, A2DP at stop). The probe has no disconnect mode; it is done by hand during a
+  long `--watched` run.

@@ -22,6 +22,11 @@ final class CaptureUnit: @unchecked Sendable {
         var description: String { "\(step) failed: OSStatus \(status)" }
     }
 
+    private static let inputElement: AudioUnitElement = 1
+    private static let outputElement: AudioUnitElement = 0
+    /// Floor for the render buffer, in case the unit reports a smaller slice than it renders.
+    private static let minimumRenderFrames: AVAudioFrameCount = 4096
+
     private let unit: AudioUnit
     private let state: CaptureState
     /// Owned by the IO thread once the unit starts. The main actor touches it again only
@@ -69,26 +74,25 @@ final class CaptureUnit: @unchecked Sendable {
     private static func configure(
         _ unit: AudioUnit, device: AudioDeviceID, state: CaptureState
     ) throws(OpenError) -> CaptureUnit {
-        // Element 1 is the input side of a HAL unit, element 0 the output side.
         var on: UInt32 = 1
         var off: UInt32 = 0
-        try setProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &on, "enabling input")
-        try setProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &off, "disabling output")
+        try setProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, inputElement, &on, "enabling input")
+        try setProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, outputElement, &off, "disabling output")
         var id = device
         try setProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &id, "binding the device")
 
         // The AUHAL does not resample input, so the client side must run at the device's rate.
         var hardware = AudioStreamBasicDescription()
-        try getProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 1, &hardware, "reading the device format")
+        try getProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, inputElement, &hardware, "reading the device format")
         guard let format = clientFormat(rate: hardware.mSampleRate, channels: hardware.mChannelsPerFrame) else {
             throw OpenError(step: "building the client format", status: kAudioUnitErr_FormatNotSupported)
         }
         var client = format.streamDescription.pointee
-        try setProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 1, &client, "setting the client format")
+        try setProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, inputElement, &client, "setting the client format")
 
         var maxFrames: UInt32 = 0
         try getProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &maxFrames, "reading the slice size")
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: max(maxFrames, 4096)) else {
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: max(maxFrames, minimumRenderFrames)) else {
             throw OpenError(step: "allocating the render buffer", status: kAudioUnitErr_FailedInitialization)
         }
 
@@ -147,7 +151,7 @@ final class CaptureUnit: @unchecked Sendable {
         }
         // Setting the length also sizes every channel's `mDataByteSize` for the render.
         buffer.frameLength = frames
-        let status = AudioUnitRender(unit, flags, timeStamp, 1, frames, buffer.mutableAudioBufferList)
+        let status = AudioUnitRender(unit, flags, timeStamp, Self.inputElement, frames, buffer.mutableAudioBufferList)
         guard status == noErr else {
             renderErrorCount.add(1, ordering: .relaxed)
             return

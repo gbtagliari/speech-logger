@@ -209,7 +209,7 @@ import os
         }
     }
 
-    /// Stop the unit and **release the device with it**. Safe on no unit at all.
+    /// Stop the unit and **release the device with it**.
     ///
     /// This is also the teardown half of a restart, where the release costs nothing: the
     /// rebuild is the next statement.
@@ -243,8 +243,8 @@ import os
     /// One observation of the capture in flight: note any frames that arrived, then do
     /// what the policy says.
     ///
-    /// Frame arrival is read as a *count that advanced*, not as a callback from the input
-    /// callback, which runs on a real-time thread and must not hop actors per buffer; a locked
+    /// Frame arrival is read as a *count that advanced*, not pushed from the input callback,
+    /// which runs on a real-time thread and must not hop actors per buffer; a locked
     /// integer read every 50 ms costs nothing and cannot glitch the audio.
     private func tick() {
         guard isCapturing, let state else { return }

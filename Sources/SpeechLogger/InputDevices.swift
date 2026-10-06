@@ -92,6 +92,6 @@ enum InputDevices {
 }
 
 extension InputDevice {
-    /// How the recorder's log names a device: its name and transport, or its transport alone.
+    /// How the recorder's log names a device.
     var logLabel: String { "\(name ?? "unnamed") [\(transport.rawValue)]" }
 }
