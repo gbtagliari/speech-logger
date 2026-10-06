@@ -1,6 +1,6 @@
 # ADR-0010 — No capture device policy: AVAudioEngine cannot avoid a Bluetooth default input
 
-Status: rejected (the policy); accepted (this record)
+Status: rejected (the policy); accepted (this record). Rejection superseded by ADR-0011
 Date: 2026-10-05
 
 ## Context
@@ -55,3 +55,5 @@ default input is never opened. Same machine and headset, idle in A2DP, 5 of 5 ru
 
 The policy is viable on an AUHAL capture path. Building it means replacing the recorder's
 `AVAudioEngine` and is a new spec.
+
+Built in #75: see ADR-0011.

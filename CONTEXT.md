@@ -102,8 +102,8 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   - `mlx_whisper` — local transcription (`whisper-large-v3-turbo`, `--language pt`). Exits 0 even
     on failure; success = output file exists and is non-empty.
   - `ffmpeg` — audio encode (capture wav → mp3). Also invoked internally by `mlx_whisper` to decode.
-    The capture wav is already 16 kHz mono: the tap converts every buffer to it (ADR-0002
-    amendment, #69).
+    The capture wav is already 16 kHz mono: the recorder converts every buffer to it as it arrives
+    (ADR-0002 amendment, #69).
   - `claude` — the Claude Code CLI, run once per pass. Gated on `is_error`, not exit code alone.
 
 - **Preflight** — the launch-time gate that checks the three binaries are present, `claude` is
@@ -140,13 +140,16 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   reason it fails under is the restart count again: `device_unavailable` when the engine had to be
   rebuilt, `empty_output` when it did not.
 
-- <a id="engine-restart"></a>**Engine restart** — the recorder throwing its `AVAudioEngine` away
-  mid-capture and building a fresh one, **immediately**, because the engine stopped under the
-  capture or stayed running while frames stopped arriving (#63). It is the app's whole recovery for
+- <a id="engine-restart"></a>**Engine restart** — the recorder throwing its capture unit away
+  mid-capture and building a fresh one on the same device, **immediately**, because the unit stopped
+  under the capture or stayed running while frames stopped arriving (#63). The "engine" was an
+  `AVAudioEngine` until #75 and is now a HAL capture unit (ADR-0011); the name and
+  `RecordingCapture.engineRestarts` stay, so stored items and the guard are untouched. It is the app's whole recovery for
   an audio device that will not stay bound, and it is *mitigation, not a cure*: measured on a
   Bluetooth headset it settles most of the time and sometimes never does.
-  - **Two signals, both needed.** `engine.isRunning` catches the engine AVFoundation stopped;
-    a stall in frame arrival catches the engine that stays "running" and delivers nothing. Never a
+  - **Two signals, both needed.** The unit's running state catches a unit that stopped; a stall in
+    frame arrival catches one that stays "running" and delivers nothing, which is also how a device
+    whose rate changed under the unit shows up (render errors, no frames). Never a
     sample-rate comparison: the ticket's device supports exactly one rate and already reports it,
     so the rate the node claims is a fiction and forcing it provably changes nothing. The
     `AVAudioEngineConfigurationChange` notification is not a signal either — it arrived *after*
@@ -162,10 +165,9 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
     was not delivering: the [dead capture](#dead-capture) verdict and the failure reason both read
     it.
 
-- **Releasing the device** — the recorder holding no `AVAudioEngine` at all between captures, so
-  the input device is claimed only while a recording is in flight. An engine holds the device for
-  as long as the object lives, and stopping it does not let go; an engine parked after `stop` is a
-  standing claim. The cost lands **outside the app**: a Bluetooth headset the machine is still
+- **Releasing the device** — the recorder holding no capture unit at all between captures, so
+  the input device is claimed only while a recording is in flight. A unit holds the device until it
+  is disposed; one parked after `stop` is a standing claim. The cost lands **outside the app**: a Bluetooth headset the machine is still
   claiming stays on the HFP/SCO link, which is 16 kHz mono, so every recording used to leave the
   user's music degraded until the app quit. The release is deliberate at `stop` and free at an
   [engine restart](#engine-restart), where the rebuild is the next statement and the stack gets no
@@ -179,19 +181,15 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
   instead is only what has to: recording exclusivity, and the hotkey grammar's need to know a
   release has a recording to stop.
 
-- **The tap install** — where the microphone is actually attached, and the one call in the app
-  that could **kill the process** (#55). Under the same contention that produces a dead capture,
-  `installTapOnBus` rejects a format it disagrees with by raising an `NSException`, and an
-  `NSException` is not catchable in Swift: `do`/`catch` never sees it, the typed `RecorderError`
-  never gets a chance, and the app terminates mid-gesture with whatever the user was about to say.
-  Closed on two fronts. The format is read off the input node and handed straight to the install
-  with nothing in between, so no window exists for it to go stale in (the format is not used for
-  anything else: each buffer is converted from its own format to the capture's, #69). What is left
-  crosses Objective-C through
-  `ObjCExceptionBridge` — the only Objective-C in the project, and the only place allowed to
-  `@try` — so a raise arrives as an error instead of ending the process. Since #63 it does not even
-  fail the recording: a raise fails that *attempt*, and the next
-  [engine restart](#engine-restart) tries again.
+- <a id="capture-device"></a>**Capture device** — the input device a capture records from, chosen
+  fresh at the start of every capture by the **capture device policy** (ADR-0011, #75). A Bluetooth
+  default input is skipped for the built-in mic when one exists, so the headset never leaves A2DP:
+  no 4–5 s switch, no 16 kHz playback, no mid-capture rate flip. Any other default input is
+  honored, and a Bluetooth mic is used when it is the only input. Automatic, no setting, and the
+  system default is never changed. The microphone checks and the device named on a failed capture
+  refer to this device, not the system default. Possible only because the recorder captures
+  through a HAL unit bound before it opens; `AVAudioEngine` opens the default input on first touch
+  (ADR-0010).
 
 - **Item directory** — storage is plain files, one directory per item (ADR-0003), no database.
   Holds `audio.mp3`, the three text stages, `pass1.txt` (the annotated pivot), and `meta.json`
@@ -235,7 +233,7 @@ lane, the states, retry, the menubar ladder, the guards — is shared.
 
 - **The speech test** — the guard's energy verdict, and the reason a silent recording leaves
   nothing behind (#46). The capture accumulates the **RMS of fixed ~20 ms windows**, spanning the
-  audio tap's buffers (whose size is a hint, not a guarantee), and hands the guard the **raw window
+  capture's buffers (whose size is the device's, not the app's), and hands the guard the **raw window
   sequence**. The verdict is *the fraction of windows above a floor*: a running peak would let one
   key click carry an empty recording into transcription, and a global average would dilute as a
   recording grew, sending a long braindump full of thinking pauses toward the silence verdict
