@@ -94,8 +94,8 @@ public struct CaptureWatchdog: Sendable {
     /// alone, rebuild the engine, or stop trying.
     ///
     /// - Parameters:
-    ///   - engineIsRunning: `AVAudioEngine.isRunning`. Catches the engine AVFoundation
-    ///     stopped out from under the capture (#63, shape 1).
+    ///   - engineIsRunning: whether the capture unit is running (an `AVAudioEngine` until
+    ///     #75). Catches the unit stopped out from under the capture (#63, shape 1).
     ///   - hasReceivedAudio: whether any frame has arrived during this capture. It
     ///     selects the stall window, not the verdict.
     ///   - sinceLastFrame: how long since the last frame arrived, or since the engine

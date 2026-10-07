@@ -57,7 +57,7 @@ let project = Project(
                 "LSUIElement": true,
                 "CFBundleName": "speech logger",
                 "CFBundleDisplayName": "speech logger",
-                // Required to record audio (AVAudioEngine triggers the mic TCC prompt).
+                // Required to record audio (opening the capture unit triggers the mic TCC prompt).
                 // Input Monitoring (the hotkey) has no usage-description key; it is
                 // gated at runtime via CGPreflightListenEventAccess (ADR-0004).
                 "NSMicrophoneUsageDescription":
@@ -67,10 +67,7 @@ let project = Project(
             // Asset catalog holding the app icon (AppIcon.appiconset).
             resources: ["Sources/SpeechLogger/Resources/**"],
             entitlements: .file(path: "Support/SpeechLogger.entitlements"),
-            dependencies: [
-                .target(name: "SpeechLoggerCore"),
-                .target(name: "ObjCExceptionBridge"),
-            ],
+            dependencies: [.target(name: "SpeechLoggerCore")],
             settings: .settings(base: appSigningSettings)
         ),
         .target(
@@ -87,21 +84,6 @@ let project = Project(
             // directory is a frozen record of the bake-off, not a source to sync with.
             resources: ["Sources/SpeechLoggerCore/Resources/**"]
         ),
-        // The only Objective-C in the project, and the reason it exists is that Swift
-        // cannot catch an `NSException` — `installTapOnBus` raises one under device
-        // contention and takes the process with it (#55). Its own target rather than a
-        // bridging header on the app: that keeps the `@try` in one auditable place and
-        // lets the unit tests reach it.
-        .target(
-            name: "ObjCExceptionBridge",
-            destinations: .macOS,
-            product: .staticFramework,
-            bundleId: "\(bundleIdPrefix).ObjCExceptionBridge",
-            deploymentTargets: deploymentTargets,
-            sources: ["Sources/ObjCExceptionBridge/**"],
-            headers: .headers(public: ["Sources/ObjCExceptionBridge/*.h"]),
-            settings: .settings(base: ["DEFINES_MODULE": "YES"])
-        ),
         .target(
             name: "SpeechLoggerCoreTests",
             destinations: .macOS,
@@ -109,10 +91,7 @@ let project = Project(
             bundleId: "\(bundleIdPrefix).SpeechLoggerCoreTests",
             deploymentTargets: deploymentTargets,
             sources: ["Tests/SpeechLoggerCoreTests/**"],
-            dependencies: [
-                .target(name: "SpeechLoggerCore"),
-                .target(name: "ObjCExceptionBridge"),
-            ]
+            dependencies: [.target(name: "SpeechLoggerCore")]
         ),
         // The prompt-drift measurement (issue #18). A command-line tool, *not* a test
         // target: it runs the real two-pass pipeline, so every sample makes billed

@@ -11,7 +11,7 @@ public struct RecordingCapture: Sendable, Equatable {
     /// fraction over 4 samples is too coarse to trust.
     public static let windowDuration: TimeInterval = 0.02
 
-    /// The native wav streamed to a temp file during capture.
+    /// The 16 kHz mono wav streamed to a temp file during capture (`CaptureState.format`).
     public let wav: URL
     /// Recording length in seconds.
     public let duration: TimeInterval
