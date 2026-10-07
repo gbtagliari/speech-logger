@@ -83,6 +83,8 @@ new format.
   stored items and the guard are untouched; the "engine" is now the capture unit.
 - The unit is opened on the main actor, as the engine was. Pre-warming and an off-main open are
   out of scope.
-- Still to verify by hand: the whole manual matrix in #75 (Bluetooth default with music, cold
+- Field use (2026-10-06): one working day on the macOS 27 SDK build with the headset connected, no
+  problem observed. Which matrix rows that day covered was not recorded row by row.
+- Still to verify by hand, row by row: the whole manual matrix in #75 (Bluetooth default with music, cold
   Bluetooth-only fallback, USB default, built-in only, headset disconnected mid-braindump, built-in
   muted, headset muted, A2DP at stop).
